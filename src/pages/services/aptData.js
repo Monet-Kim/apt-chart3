@@ -82,7 +82,7 @@ async function fetchIndexedCsvs(folder, candidates) {
 
       const prefix = name.replace(/_index\.json$/i, '');
       const tasks = years.map((y) => {
-        const csvUrl = `/${folder}/${enc(`${prefix}_${y}.csv`)}`;
+        const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv`)}`;
         return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
           if (!r.ok) throw new Error(`CSV HTTP ${r.status}`);
           return parseCSV(await r.text(), false);
