@@ -1,0 +1,3 @@
+cd /d D:\apt-chart3
+
+npm start

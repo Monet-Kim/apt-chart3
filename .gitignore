@@ -1,0 +1,14 @@
+# 데이터 파일 (대용량 CSV)
+public/Rdata/
+public/Pdata/
+public/coordinput/
+
+# 라이브러리
+node_modules/
+
+# 빌드 결과물
+build/
+
+# 기타
+.env
+.DS_Store
