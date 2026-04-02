@@ -5,6 +5,9 @@ import { parseCSV } from '../utils/csvUtils';
 
 const fileCache = new Map();
 
+const R2_BASE = process.env.NODE_ENV === 'production'
+  ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
+  : "";
 // 3x3 격자 샘플 포인트
 const makeGridPoints = (bbox) => {
   const lats = [bbox.south, (bbox.south + bbox.north) / 2, bbox.north];
@@ -19,14 +22,14 @@ const pointToFile = (pt) => new Promise((resolve) => {
   const geocoder = new window.kakao.maps.services.Geocoder();
   geocoder.coord2RegionCode(pt.lng, pt.lat, (res, status) => {
     if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
-      resolve('/coordinput/서울특별시_송파구_11710_list_coord.csv');
+      resolve(`${R2_BASE}/coordinput/서울특별시_송파구_11710_list_coord.csv`);
       return;
     }
     const b = res.find(r => r.region_type === 'B') || res[0];
     const s1 = b.region_1depth_name || '서울특별시';
     const s2 = b.region_2depth_name || '송파구';
     const code5 = (b.code || '').slice(0, 5) || '11710';
-    resolve(`/coordinput/${s1}_${s2}_${code5}_list_coord.csv`);
+    resolve(`${R2_BASE}/coordinput/${s1}_${s2}_${code5}_list_coord.csv`);
   });
 });
 
