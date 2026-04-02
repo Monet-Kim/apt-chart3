@@ -1,0 +1,11 @@
+https://pub-8c65c427a291446c9384665be9201bea.r2.dev
+
+
+CVS 파일을 업로드 해 저장 하기 위한 공간.
+https://dash.cloudflare.com/
+
+
+API 토큰
+Access Key ID: 71e270652969acf7a661d46404a196c6
+Secret Access Key: e0bdd25cd87d66f24a08e7d98387196fa2316bec40d8fe3b0426aa308fa609d4
+Endpoint: https://485ad5b19488023956187106c5f363d2.r2.cloudflarestorage.com

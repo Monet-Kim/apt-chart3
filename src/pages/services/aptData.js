@@ -2,6 +2,9 @@
 import { ymToDate, dateToYM, addMonths, diffMonths } from '../../utils/dateUtils';
 import { parseCSV } from '../../utils/csvUtils';
 
+const R2_BASE = process.env.NODE_ENV === 'production'
+  ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
+  : "";
 const workbookCache = new Map(); // code5 -> { wb, url }  (Rdata)
 const pdataCache   = new Map(); // code5 -> { wb, url }  (Pdata)
 const tradeCache   = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
@@ -68,7 +71,7 @@ export function buildPNU(row) {
 async function fetchIndexedCsvs(folder, candidates) {
   let lastErr = null;
   for (const name of candidates) {
-    const url = `/${folder}/${enc(name)}`;
+    const url = `${R2_BASE}/${folder}/${enc(name)}`;
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
