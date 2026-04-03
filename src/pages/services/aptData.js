@@ -129,26 +129,40 @@ export async function fetchPdata(as1, as2, code5) {
 }
 
 // 특정 pnu의 전용면적 목록(버림 1자리, 오름차순)
-// PNU 매칭 결과가 없고 kaptName이 주어지면 aptNm 기반 fallback
-export function listAreasForPnu(wb, pnu, kaptName = null) {
+// Rdata PNU/aptNm 매칭 + Pdata aptNm 매칭 결과를 항상 union
+// (다필지 단지, 신규단지 분양권 거래만 존재하는 대형 평형 누락 방지)
+export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
   const set = new Set();
   const pnuStr = String(pnu);
+
+  // Rdata PNU 매칭
   for (const obj of (wb || [])) {
     if (String(obj.pnu).trim() !== pnuStr) continue;
     const ar = toNum(obj.excluUseAr);
-    if (!Number.isFinite(ar)) continue;
-    set.add(floor1(ar));
+    if (Number.isFinite(ar)) set.add(floor1(ar));
   }
-  // PNU가 데이터에 없을 때 aptNm으로 fallback (재건축 등 지번 불일치 케이스)
-  if (set.size === 0 && kaptName) {
+
+  // Rdata aptNm 매칭
+  if (kaptName) {
     const targetNorm = normAptNm(kaptName);
     for (const obj of (wb || [])) {
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
       const ar = toNum(obj.excluUseAr);
-      if (!Number.isFinite(ar)) continue;
-      set.add(floor1(ar));
+      if (Number.isFinite(ar)) set.add(floor1(ar));
     }
   }
+
+  // Pdata aptNm 매칭 (분양권 전매 거래 포함 — 신규 단지 대형 평형 누락 방지)
+  if (pdWb && kaptName) {
+    const targetNorm = normAptNm(kaptName);
+    for (const obj of pdWb) {
+      if (toNum(obj.isCanceled) === 1) continue;
+      if (normAptNm(obj.aptNm) !== targetNorm) continue;
+      const ar = toNum(obj.excluUseAr);
+      if (Number.isFinite(ar)) set.add(floor1(ar));
+    }
+  }
+
   return Array.from(set).sort((a, b) => a - b);
 }
 
@@ -196,14 +210,18 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   // ── Rdata 집계 ──────────────────────────────────────────
   const rPtsX = [], rPtsY = [];
 
-  // PNU가 데이터에 존재하는지 먼저 확인 → 없으면 aptNm fallback (재건축 등)
+  // PNU 매칭 + aptNm 매칭 union (다필지 단지 대응)
   const pnuStr = String(pnu);
-  const hasPnu = (wb || []).some(obj => String(obj.pnu).trim() === pnuStr);
-  const rFallbackNorm = (!hasPnu && kaptName) ? normAptNm(kaptName) : null;
+  const rNormName = kaptName ? normAptNm(kaptName) : null;
+
+  const rMatches = (obj) => {
+    if (String(obj.pnu).trim() === pnuStr) return true;
+    if (rNormName && normAptNm(obj.aptNm) === rNormName) return true;
+    return false;
+  };
 
   for (const obj of (wb || [])) {
-    if (rFallbackNorm ? normAptNm(obj.aptNm) !== rFallbackNorm
-                      : String(obj.pnu).trim() !== pnuStr) continue;
+    if (!rMatches(obj)) continue;
 
     const ar = toNum(obj.excluUseAr);
     if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > areaTol) continue;

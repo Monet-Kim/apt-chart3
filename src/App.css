@@ -42,3 +42,28 @@
   bottom: 0 !important;
   z-index: 100 !important;
 }
+
+/* 전역 스크롤바 — 파란색 계열 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #a0aeff #f0f2ff;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f0f2ff;
+  border-radius: 99px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #a0aeff;
+  border-radius: 99px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #6476FF;
+}

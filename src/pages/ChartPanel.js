@@ -1,14 +1,15 @@
 // src/pages/ChartPanel.js
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { commonPanelStyle } from '../styles/panelStyles';
 import { ymToDate, dateToISOYM, dateToYM, addMonths } from '../utils/dateUtils';
 import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import { buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu, aggregateTradesForArea, groupAreasToRep } from './services/aptData';
+import { trimAptName } from '../utils/aptNameUtils';
 
 const SERIES_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
 
-export default function ChartPanel({ isOpen = false, favApts = [], removeFavoriteApt, onClose }) {
+export default function ChartPanel({ isOpen = false, favApts = [], removeFavoriteApt, onClose, isMobile = false, isTablet = false }) {
   const [activeKey, setActiveKey] = useState(null);
   const [xRange, setXRange] = useState(null);
   const [yearWindow, setYearWindow] = useState(5);
@@ -56,15 +57,17 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     const traces = series.map((s, idx) => {
       const { base, reason } = getBase(s);
       if (!Number.isFinite(base) || base <= 0) {
-        if (reason === '과거 데이터 범위 부족') excluded.push(`${s.kaptName} ${s.area}㎡`);
+        if (reason === '과거 데이터 범위 부족') excluded.push(`${trimAptName(s.kaptName)} ${s.area}㎡`);
         return null;
       }
+      const label = `${trimAptName(s.kaptName)} ${s.area}㎡`;
       return {
         type: 'scatter', mode: 'lines',
         x: s.x,
         y: (s.y || []).map(v => (Number.isFinite(v) ? (v / base) * 100 : NaN)),
-        name: `${s.kaptName} ${s.area}㎡`,
+        name: label,
         line: { width: 2, color: SERIES_COLORS[idx % SERIES_COLORS.length] },
+        hovertemplate: `${label} %{y:.1f}%<extra></extra>`,
       };
     }).filter(Boolean);
 
@@ -78,9 +81,16 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     try {
       const { pnu, reason } = buildPNU(fav);
       if (!pnu) throw new Error(reason || 'PNU 생성 실패');
-      const { wb } = await fetchWorkbook(fav.as1, fav.as2, String(fav.bjdCode || '').slice(0, 5));
-      const rawList = listAreasForPnu(wb, pnu, fav.kaptName || null);
-      const list = groupAreasToRep(rawList, 0.5); // LeftPanel과 동일한 그룹핑 적용
+      const code5 = String(fav.bjdCode || '').slice(0, 5);
+      const [rResult, pResult] = await Promise.allSettled([
+        fetchWorkbook(fav.as1, fav.as2, code5),
+        fetchPdata(fav.as1, fav.as2, code5),
+      ]);
+      if (rResult.status === 'rejected') throw rResult.reason;
+      const { wb } = rResult.value;
+      const pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
+      const rawList = listAreasForPnu(wb, pnu, fav.kaptName || null, pdWb);
+      const list = groupAreasToRep(rawList, 0.5);
       setAreasByKey(prev => ({ ...prev, [fav.key]: list }));
       if (!list.length) setErrMsg('면적 목록이 없습니다.');
     } catch {
@@ -119,6 +129,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         next.push({
           id, key: fav.key, kaptName: fav.kaptName, area: areaNorm,
           x: pack.x || [], y: pack.avg || [],
+          ptsX: pack.ptsX || [], ptsY: pack.ptsY || [],
           pPtsX: pack.pPtsX || [], pPtsY: pack.pPtsY || [],
         });
         return next;
@@ -133,22 +144,37 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     const traces = [];
     series.forEach((s, idx) => {
       const color = SERIES_COLORS[idx % SERIES_COLORS.length];
+      const label = `${trimAptName(s.kaptName)} ${s.area}㎡`;
       // 평균가 라인
       traces.push({
         type: 'scatter', mode: 'lines',
         x: s.x, y: s.y,
-        name: `${s.kaptName} ${s.area}㎡`,
+        name: label,
         line: { width: 2, color },
+        hovertemplate: `${label} %{y:.2f}억<extra></extra>`,
       });
-      // 분양권 산점 (Pdata)
+      // 실거래 산점 (circle) — 팝업 제외
+      if (s.ptsX?.length) {
+        traces.push({
+          type: 'scatter', mode: 'markers',
+          x: s.ptsX, y: s.ptsY,
+          name: `${label} 실거래`,
+          opacity: 0.6,
+          marker: { size: 5, color, symbol: 'circle' },
+          showlegend: false,
+          hoverinfo: 'skip',
+        });
+      }
+      // 입주권 산점 (triangle-up) — 팝업 제외
       if (s.pPtsX?.length) {
         traces.push({
           type: 'scatter', mode: 'markers',
           x: s.pPtsX, y: s.pPtsY,
-          name: `${s.kaptName} ${s.area}㎡ 분양권`,
-          opacity: 0.55,
-          marker: { size: 7, color: '#9467bd', symbol: 'diamond' },
+          name: `${label} 입주권`,
+          opacity: 0.6,
+          marker: { size: 6, color, symbol: 'triangle-up' },
           showlegend: false,
+          hoverinfo: 'skip',
         });
       }
     });
@@ -220,25 +246,27 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     }
   };
 
+  const chartHeight = isMobile ? 220 : isTablet ? 260 : 300;
+  const headerPad = isMobile ? '12px 16px 10px' : isTablet ? '14px 20px 10px' : '18px 24px 12px';
+  const btnH = isMobile ? 44 : 40; // 터치 타겟
+
   return (
     <aside style={{ ...commonPanelStyle, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       {/* 상단: 즐겨찾기 단지 + 면적 선택 */}
-      <div style={{ borderBottom: '1.5px solid #e7eaf3', background: '#f9faff', fontWeight: 700, fontSize: '1.12rem', padding: '18px 22px 10px', maxHeight: 260, overflowY: 'auto', flex: '0 0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 34 }}>
+      <div style={{ borderBottom: '1.5px solid #e7eaf3', background: '#f9faff', fontWeight: 700, fontSize: '1.05rem', padding: headerPad, flex: '0 0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 36 }}>
           <span>즐겨찾기 단지 비교</span>
           <button
             onClick={onClose}
-            style={{ color: '#6476FF', background: 'none', border: 'none', fontWeight: 900, cursor: 'pointer', fontSize: '1.15rem', width: 28, height: 28, borderRadius: 7 }}
+            style={{ color: '#6476FF', background: 'none', border: 'none', fontWeight: 900, cursor: 'pointer', fontSize: '1.15rem', width: 44, height: 44, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             title="닫기"
-            onMouseOver={e => e.currentTarget.style.background = '#e8eefa'}
-            onMouseOut={e => e.currentTarget.style.background = 'none'}
           >✕</button>
         </div>
 
         {/* 즐겨찾기 단지 칩 */}
-        <div style={{ marginTop: 10, padding: '10px 10px', background: '#fff', border: '1px solid #e7eaf3', borderRadius: 12, minHeight: 54, maxHeight: 120, overflowY: 'auto', display: 'flex', flexWrap: 'wrap', gap: '8px 9px', alignItems: 'flex-start' }}>
+        <div style={{ marginTop: 10, padding: '10px', background: '#fff', border: '1px solid #e7eaf3', borderRadius: 12, minHeight: 54, display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'flex-start' }}>
           {favApts.length === 0 ? (
-            <span style={{ color: '#aaa', fontWeight: 600, fontSize: '0.98rem' }}>추가된 아파트가 없습니다.</span>
+            <span style={{ color: '#aaa', fontWeight: 600, fontSize: '0.95rem' }}>추가된 아파트가 없습니다.</span>
           ) : (
             favApts.map((fav) => {
               const active = fav.key === activeKey;
@@ -246,10 +274,10 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                 <button
                   key={fav.key}
                   onClick={async () => { setActiveKey(fav.key); await loadAreas(fav); }}
-                  style={{ background: active ? '#eaf0ff' : '#f7faff', border: active ? '1px solid #6476FF' : '1px solid #d6def2', borderRadius: 10, padding: '6px 10px', fontWeight: 900, cursor: 'pointer', fontSize: '0.95rem', color: '#1f2b49', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                  style={{ background: active ? '#eaf0ff' : '#f7faff', border: active ? '1px solid #6476FF' : '1px solid #d6def2', borderRadius: 10, height: btnH, padding: '0 12px', fontWeight: 900, cursor: 'pointer', fontSize: '0.95rem', color: '#1f2b49', display: 'inline-flex', alignItems: 'center', gap: 10 }}
                   title="클릭해서 면적 선택"
                 >
-                  {fav.kaptName}
+                  {trimAptName(fav.kaptName)}
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
@@ -257,7 +285,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                       if (activeKey === fav.key) setActiveKey(null);
                       setSeries(prev => prev.filter(s => s.key !== fav.key));
                     }}
-                    style={{ color: '#6476FF', fontWeight: 900, cursor: 'pointer' }}
+                    style={{ color: '#6476FF', fontWeight: 900, cursor: 'pointer', fontSize: '1rem' }}
                     title="즐겨찾기 삭제"
                   >✕</span>
                 </button>
@@ -268,8 +296,8 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
 
         {/* 면적 선택 */}
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: '0.90rem', fontWeight: 900, color: '#1f2b49', marginBottom: 0 }}>
-            전용면적 선택 {activeFav && <span style={{ color: '#6a7692' }}>{activeFav.kaptName}</span>}
+          <div style={{ fontSize: '0.90rem', fontWeight: 900, color: '#1f2b49', marginBottom: 6 }}>
+            전용면적 선택 {activeFav && <span style={{ color: '#6a7692' }}>{trimAptName(activeFav.kaptName)}</span>}
           </div>
           <div
             ref={areaScrollRef}
@@ -277,7 +305,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             onMouseMove={onAreaMouseMove}
             onMouseUp={onAreaMouseUp}
             onMouseLeave={onAreaMouseUp}
-            style={{ width: '100%', overflowX: 'auto', whiteSpace: 'nowrap', paddingBottom: 0, cursor: dragRef.current.down ? 'grabbing' : 'grab', userSelect: 'none' }}
+            style={{ width: '100%', overflowX: 'auto', whiteSpace: 'nowrap', cursor: dragRef.current.down ? 'grabbing' : 'grab', userSelect: 'none', paddingBottom: 4 }}
           >
             {!activeFav ? (
               <span style={{ color: '#9aa6c3', fontWeight: 700, fontSize: '0.92rem' }}>위에서 단지를 클릭하면 면적을 선택할 수 있습니다.</span>
@@ -290,7 +318,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                 <button
                   key={ar}
                   onClick={() => addSeries(activeFav, ar)}
-                  style={{ display: 'inline-block', marginRight: 7, padding: '6px 10px', borderRadius: 12, border: '1px solid #d6def2', background: '#fff', fontWeight: 500, cursor: 'pointer', fontSize: '0.9rem', color: '#1f2b49' }}
+                  style={{ display: 'inline-flex', alignItems: 'center', marginRight: 8, height: btnH, padding: '0 14px', borderRadius: 12, border: '1px solid #d6def2', background: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: '0.92rem', color: '#1f2b49' }}
                   title="클릭하면 그래프에 누적 추가"
                 >
                   {ar}㎡
@@ -308,7 +336,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
           {series.map((s, idx) => (
             <div key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 900, fontSize: '0.9rem', color: '#1f2b49', background: '#f7faff', border: '1px solid #e7eaf3', padding: '4px 8px', borderRadius: 999 }}>
               <span style={{ width: 10, height: 3, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 3 }} />
-              <span>{s.kaptName} {s.area}㎡</span>
+              <span>{trimAptName(s.kaptName)} {s.area}㎡</span>
               <button
                 onClick={() => setSeries(prev => prev.filter(x => x.id !== s.id))}
                 style={{ border: 'none', background: 'none', cursor: 'pointer', fontWeight: 900, color: '#6476FF', lineHeight: 1, padding: 0 }}
@@ -319,33 +347,35 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         </div>
       )}
 
-      {/* 그래프 영역 */}
-      <div style={{ flex: 1, minHeight: 0, padding: 10, display: 'flex', flexDirection: 'column', gap: 10, overflow: 'hidden' }}>
+      {/* 그래프 영역 — 스크롤로 안정적인 크기 보장 */}
+      <div style={{ flex: '0 0 auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {/* 표시 기간 + 스무딩 조절 */}
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', gap: '4px 8px', padding: '6px 10px 0', fontSize: '0.82rem', color: '#444' }}>
           <span style={{ fontWeight: 900 }}>기간 조절</span>
-          <button onClick={() => changeYearWindow(-1)} style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: '#f7f9fc', cursor: 'pointer' }}>– 1년</button>
+          <button onClick={() => changeYearWindow(-1)} style={{ border: '1px solid #d0d7e2', borderRadius: 6, padding: '0 10px', height: 36, background: '#f7f9fc', cursor: 'pointer' }}>– 1년</button>
           <span style={{ minWidth: 70, textAlign: 'center' }}>최근 {yearWindow}년</span>
-          <button onClick={() => changeYearWindow(+1)} style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: '#f7f9fc', cursor: 'pointer' }}>+ 1년</button>
+          <button onClick={() => changeYearWindow(+1)} style={{ border: '1px solid #d0d7e2', borderRadius: 6, padding: '0 10px', height: 36, background: '#f7f9fc', cursor: 'pointer' }}>+ 1년</button>
           <span style={{ marginLeft: 6, fontWeight: 900 }}>스무딩</span>
           {[1, 3, 6].map(w => (
             <button key={w} onClick={() => changeSmoothWindow(w)}
-              style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: smoothWindow === w ? '#6476FF' : '#f7f9fc', color: smoothWindow === w ? '#fff' : '#444', cursor: 'pointer' }}>
+              style={{ border: '1px solid #d0d7e2', borderRadius: 6, padding: '0 10px', height: 36, background: smoothWindow === w ? '#6476FF' : '#f7f9fc', color: smoothWindow === w ? '#fff' : '#444', cursor: 'pointer' }}>
               {w === 1 ? '없음' : `${w}M`}
             </button>
           ))}
         </div>
 
         {/* 원본(억) 그래프 */}
-        <div style={{ position: 'relative', width: '100%', flex: 1, minHeight: 0 }}>
+        <div style={{ position: 'relative', width: '100%', height: chartHeight }}>
           {isOpen ? (
             <Plot
               data={plotData}
               layout={{
                 margin: { t: 26, b: 75, l: 80, r: 40 },
                 dragmode: 'pan',
-                xaxis: { type: 'date', tickformat: '%Y.%m', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined },
-                yaxis: { side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true },
+                hovermode: 'x',
+                hoverlabel: { bgcolor: '#1f2b49', bordercolor: '#6476FF', font: { color: '#fff', size: 12 }, namelength: -1 },
+                xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6476FF', spikedash: 'solid', spikethickness: 1 },
+                yaxis: { side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
                 showlegend: false,
                 shapes: [...monthLines, ...janLines],
               }}
@@ -388,15 +418,17 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         )}
 
         {/* 정규화(%) 그래프 */}
-        <div style={{ position: 'relative', width: '100%', flex: 1, minHeight: 0 }}>
+        <div style={{ position: 'relative', width: '100%', height: chartHeight }}>
           {isOpen ? (
             <Plot
               data={plotDataNormPack.traces}
               layout={{
                 margin: { t: 26, b: 75, l: 80, r: 40 },
                 dragmode: 'pan',
-                xaxis: { type: 'date', tickformat: '%Y.%m', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined },
-                yaxis: { side: 'right', ticksuffix: '%', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true },
+                hovermode: 'x',
+                hoverlabel: { bgcolor: '#1f2b49', bordercolor: '#6476FF', font: { color: '#fff', size: 12 }, namelength: -1 },
+                xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6476FF', spikedash: 'solid', spikethickness: 1 },
+                yaxis: { side: 'right', ticksuffix: '%', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
                 showlegend: false,
                 shapes: [...monthLines, ...janLines],
               }}
