@@ -21,7 +21,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const [suggestions, setSuggestions] = useState([]);
 
   // 전용면적 드래그 스크롤
-  const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: endAreaDrag } = useAreaDragScroll();
+  const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: endAreaDrag, onTouchStart: onAreaTouchStart, onTouchMove: onAreaTouchMove, onTouchEnd: endAreaTouchDrag } = useAreaDragScroll();
 
   // 선택 아파트 관련 상태
   const [pnu, setPnu] = useState(null);
@@ -360,6 +360,9 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
               onMouseMove={onAreaMouseMove}
               onMouseUp={endAreaDrag}
               onMouseLeave={endAreaDrag}
+              onTouchStart={onAreaTouchStart}
+              onTouchMove={onAreaTouchMove}
+              onTouchEnd={endAreaTouchDrag}
               style={{ display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'hidden', padding: '6px 4px', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin', cursor: dragRef.current?.down ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'pan-x', borderRadius: 10 }}
             >
               {areas.map((a) => {
@@ -369,6 +372,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
                     key={a}
                     onClick={() => handleAreaClick(a)}
                     onMouseDown={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
                     style={{ flex: '0 0 auto', minWidth: 72, height: 44, padding: '0 8px', borderRadius: 12, fontWeight: 900, fontSize: '0.95rem', cursor: 'pointer', border: active ? '2px solid #6476FF' : '1px solid #dbe5f5', background: active ? '#6476FF' : '#f7faff', color: active ? '#fff' : '#1f2b49', boxShadow: active ? '0 6px 16px rgba(100,118,255,0.22)' : 'none', transition: 'transform 0.08s ease' }}
                   >
                     {a.toFixed(1)}㎡

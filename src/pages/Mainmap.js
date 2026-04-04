@@ -241,7 +241,7 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
           // 레벨 6~7: 주황색 점만
           if (level >= 6) {
             return (
-              <CustomOverlayMap key={`dot-${i}`} position={pos} yAnchor={0.5} xAnchor={0.5}>
+              <CustomOverlayMap key={`dot-${i}`} position={pos} yAnchor={0.5} xAnchor={0.5} clickable>
                 <div
                   onClick={() => selectRow(row)}
                   style={{
@@ -260,7 +260,7 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
           // 레벨 5: 이름만
           if (level === 5) {
             return (
-              <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5}>
+              <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5} clickable>
                 <div style={labelStyle} onClick={() => selectRow(row)}>
                   <span>{trimAptName(row['kaptName'])}</span>
                 </div>
@@ -272,7 +272,7 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
           const key = `${row['kaptName']}_${row['bjdCode'] || ''}`;
           const info = markerPrices.get(key);
           return (
-            <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5}>
+            <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5} clickable>
               <div style={labelStyle} onClick={() => selectRow(row)}>
                 <span>{trimAptName(row['kaptName'])}</span>
                 {info && (

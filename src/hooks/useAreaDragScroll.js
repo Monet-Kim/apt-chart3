@@ -19,5 +19,19 @@ export function useAreaDragScroll() {
 
   const onMouseUp = () => { dragRef.current.down = false; };
 
-  return { scrollRef, dragRef, onMouseDown, onMouseMove, onMouseUp };
+  const onTouchStart = (e) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    dragRef.current = { down: true, startX: e.touches[0].pageX, startLeft: el.scrollLeft };
+  };
+
+  const onTouchMove = (e) => {
+    const el = scrollRef.current;
+    if (!el || !dragRef.current.down) return;
+    el.scrollLeft = dragRef.current.startLeft - (e.touches[0].pageX - dragRef.current.startX);
+  };
+
+  const onTouchEnd = () => { dragRef.current.down = false; };
+
+  return { scrollRef, dragRef, onMouseDown, onMouseMove, onMouseUp, onTouchStart, onTouchMove, onTouchEnd };
 }
