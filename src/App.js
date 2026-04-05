@@ -1,5 +1,5 @@
 // src/App.js
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
 import Mainmap from './pages/Mainmap';
 import LeftPanel from './pages/LeftPanel';
@@ -31,6 +31,28 @@ function App() {
     if (!isDesktop) setIsLeftPanelOpen(false);
   };
   const closePanel = () => setOpenPanel(null);
+
+  // 뒤로가기 버튼 처리 — 열린 패널 닫기
+  const openPanelRef = useRef(openPanel);
+  const isLeftPanelOpenRef = useRef(isLeftPanelOpen);
+  useEffect(() => { openPanelRef.current = openPanel; }, [openPanel]);
+  useEffect(() => { isLeftPanelOpenRef.current = isLeftPanelOpen; }, [isLeftPanelOpen]);
+
+  useEffect(() => {
+    history.pushState(null, '');
+    const handlePopState = () => {
+      const hadPanel = openPanelRef.current || isLeftPanelOpenRef.current;
+      if (openPanelRef.current) {
+        setOpenPanel(null);
+      } else if (isLeftPanelOpenRef.current) {
+        setIsLeftPanelOpen(false);
+      }
+      // 패널을 닫은 경우 다음 뒤로가기를 위해 더미 상태 재적립
+      if (hadPanel) history.pushState(null, '');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // 즐겨찾기
   const [favApts, setFavApts] = useState([]);
