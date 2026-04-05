@@ -349,7 +349,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
           {pnuErr && <div style={{ color: '#c33', marginTop: 6, fontSize: '0.92rem' }}>{pnuErr}</div>}
 
           {/* 전용면적 선택 */}
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 8, flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center', fontWeight: 900, fontSize: '1.05rem', color: '#1f2b49', marginBottom: 4 }}>
               <span>전용면적 선택</span>
               {areaRangeText && <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#6a7692' }}>{areaRangeText}</span>}
@@ -373,7 +373,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
                     onClick={() => handleAreaClick(a)}
                     onMouseDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    style={{ flex: '0 0 auto', minWidth: 72, height: 44, padding: '0 8px', borderRadius: 12, fontWeight: 900, fontSize: '0.95rem', cursor: 'pointer', border: active ? '2px solid #6476FF' : '1px solid #dbe5f5', background: active ? '#6476FF' : '#f7faff', color: active ? '#fff' : '#1f2b49', boxShadow: active ? '0 6px 16px rgba(100,118,255,0.22)' : 'none', transition: 'transform 0.08s ease' }}
+                    style={{ flex: '0 0 auto', minWidth: isMobile ? 56 : 72, height: isMobile ? 32 : 44, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 10, fontWeight: 900, fontSize: isMobile ? '0.80rem' : '0.95rem', cursor: 'pointer', border: active ? '2px solid #6476FF' : '1px solid #dbe5f5', background: active ? '#6476FF' : '#f7faff', color: active ? '#fff' : '#1f2b49', boxShadow: active ? '0 6px 16px rgba(100,118,255,0.22)' : 'none', transition: 'transform 0.08s ease' }}
                   >
                     {a.toFixed(1)}㎡
                   </button>
@@ -384,7 +384,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
           </div>
 
           {/* 그래프 */}
-          <div style={{ width: '100%', height: isMobile ? 260 : isTablet ? 300 : 360, minHeight: 200, background: '#fff', borderRadius: 8, marginTop: 4, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ width: '100%', height: isMobile ? 320 : isTablet ? 300 : 360, minHeight: isMobile ? 320 : 200, flexShrink: 0, background: '#fff', borderRadius: 8, marginTop: 4, display: 'flex', flexDirection: 'column' }}>
             {(loadingTrade || loadingInfo) && <div style={{ padding: 12, color: '#6476FF' }}>로딩 중…</div>}
             {tradeErr && <div style={{ padding: 12, color: '#c33' }}>{tradeErr}</div>}
 
