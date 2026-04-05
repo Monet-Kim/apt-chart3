@@ -1,5 +1,5 @@
 // src/pages/ChartPanel.js
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { commonPanelStyle } from '../styles/panelStyles';
 import { ymToDate, dateToISOYM, dateToYM, addMonths } from '../utils/dateUtils';
@@ -61,13 +61,14 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         return null;
       }
       const label = `${trimAptName(s.kaptName)} ${s.area}㎡`;
+      const color = SERIES_COLORS[idx % SERIES_COLORS.length];
       return {
         type: 'scatter', mode: 'lines',
         x: s.x,
         y: (s.y || []).map(v => (Number.isFinite(v) ? (v / base) * 100 : NaN)),
         name: label,
-        line: { width: 2, color: SERIES_COLORS[idx % SERIES_COLORS.length] },
-        hovertemplate: `${label} %{y:.1f}%<extra></extra>`,
+        line: { width: 2, color },
+        hoverinfo: 'none',
       };
     }).filter(Boolean);
 
@@ -151,7 +152,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         x: s.x, y: s.y,
         name: label,
         line: { width: 2, color },
-        hovertemplate: `${label} %{y:.2f}억<extra></extra>`,
+        hoverinfo: 'none',
       });
       // 실거래 산점 (circle) — 팝업 제외
       if (s.ptsX?.length) {
@@ -246,7 +247,32 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     }
   };
 
-  const chartHeight = isMobile ? 220 : isTablet ? 260 : 300;
+  // TradingView 스타일 Y축 라벨
+  const priceChartDiv = useRef(null);
+  const normChartDiv  = useRef(null);
+  const [priceLabels, setPriceLabels] = useState([]);
+  const [normLabels,  setNormLabels]  = useState([]);
+
+  const calcYLabels = useCallback((eventData, graphDiv, suffix) => {
+    if (!graphDiv?._fullLayout?.yaxis) return [];
+    const ya = graphDiv._fullLayout.yaxis;
+    if (!Number.isFinite(ya._length) || !ya.range) return [];
+    const [y0, y1] = ya.range;
+    const range = y1 - y0;
+    if (!range) return [];
+    return eventData.points
+      .filter(pt => pt.data?.line?.color && Number.isFinite(pt.y))
+      .map(pt => {
+        const pct  = (pt.y - y0) / range;
+        const yPx  = ya._offset + ya._length * (1 - pct);
+        const text = suffix === '억' ? `${pt.y.toFixed(2)}억` : `${pt.y.toFixed(1)}%`;
+        return { yPx, text, color: pt.data.line.color };
+      });
+  }, []);
+
+  const chartHeight = isMobile
+    ? Math.round(window.innerWidth * (2 / 3))
+    : isTablet ? 300 : 320;
   const headerPad = isMobile ? '12px 16px 10px' : isTablet ? '14px 20px 10px' : '18px 24px 12px';
   const btnH = isMobile ? 44 : 40; // 터치 타겟
 
@@ -370,12 +396,11 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             <Plot
               data={plotData}
               layout={{
-                margin: { t: 26, b: 75, l: 80, r: 40 },
+                margin: { t: 26, b: 75, l: 80, r: 56 },
                 dragmode: 'pan',
                 hovermode: 'x',
-                hoverlabel: { bgcolor: '#1f2b49', bordercolor: '#6476FF', font: { color: '#fff', size: 12 }, namelength: -1 },
                 xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6476FF', spikedash: 'solid', spikethickness: 1 },
-                yaxis: { side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
+                yaxis: { side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true, showspikes: false, showticklabels: false },
                 showlegend: false,
                 shapes: [...monthLines, ...janLines],
               }}
@@ -383,17 +408,44 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               style={{ width: '100%', height: '100%' }}
               config={{ responsive: true, scrollZoom: true, displayModeBar: false }}
               onRelayout={handleRelayout}
+              onInitialized={(_, gd) => { priceChartDiv.current = gd; }}
+              onUpdate={(_, gd)      => { priceChartDiv.current = gd; }}
+              onHover={(data)  => setPriceLabels(calcYLabels(data, priceChartDiv.current, '억'))}
+              onUnhover={()    => setPriceLabels([])}
             />
           ) : (
             <div style={{ width: '100%', height: '100%' }} />
           )}
-
-          {/* Y축 조절 버튼 — 원본 그래프 div 안에 위치 */}
+          {/* TradingView 스타일 Y축 라벨 */}
+          {priceLabels.map((lbl, i) => (
+            <div key={i} style={{
+              position: 'absolute', right: 2,
+              top: lbl.yPx, transform: 'translateY(-50%)',
+              background: lbl.color, color: '#fff',
+              fontSize: '11px', fontWeight: 700,
+              padding: '2px 5px', borderRadius: 3,
+              pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10,
+            }}>
+              {lbl.text}
+            </div>
+          ))}
+          {/* Y축 조절 버튼 */}
           <div style={{ position: 'absolute', top: '50%', right: 10, transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.7rem' }}>
             <button onClick={() => changeY2Max(-1)} style={{ padding: '2px 4px', borderRadius: 4, border: '1px solid #d0d7e2', background: '#f7f9fc', cursor: 'pointer' }}>-1억</button>
             <button onClick={() => changeY2Max(+1)} style={{ padding: '2px 4px', borderRadius: 4, border: '1px solid #d0d7e2', background: '#f7f9fc', cursor: 'pointer' }}>+1억</button>
           </div>
         </div>
+        {/* 원본 그래프 범례 */}
+        {series.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', padding: '4px 10px 0' }}>
+            {series.map((s, idx) => (
+              <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 700, color: '#1f2b49' }}>
+                <span style={{ width: 16, height: 3, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2, flexShrink: 0 }} />
+                {trimAptName(s.kaptName)} {s.area}㎡
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* 정규화 기준 선택 */}
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'center', position: 'sticky', top: 0, zIndex: 20, background: '#fff', padding: '8px 0', borderTop: '1px solid #eef1f7', borderBottom: '1px solid #eef1f7' }}>
@@ -423,12 +475,11 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             <Plot
               data={plotDataNormPack.traces}
               layout={{
-                margin: { t: 26, b: 75, l: 80, r: 40 },
+                margin: { t: 26, b: 75, l: 80, r: 56 },
                 dragmode: 'pan',
                 hovermode: 'x',
-                hoverlabel: { bgcolor: '#1f2b49', bordercolor: '#6476FF', font: { color: '#fff', size: 12 }, namelength: -1 },
                 xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6476FF', spikedash: 'solid', spikethickness: 1 },
-                yaxis: { side: 'right', ticksuffix: '%', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
+                yaxis: { side: 'right', ticksuffix: '%', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true, showspikes: false, showticklabels: false },
                 showlegend: false,
                 shapes: [...monthLines, ...janLines],
               }}
@@ -436,11 +487,39 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               style={{ width: '100%', height: '100%' }}
               config={{ responsive: true, scrollZoom: true, displayModeBar: false }}
               onRelayout={handleRelayout}
+              onInitialized={(_, gd) => { normChartDiv.current = gd; }}
+              onUpdate={(_, gd)      => { normChartDiv.current = gd; }}
+              onHover={(data)  => setNormLabels(calcYLabels(data, normChartDiv.current, '%'))}
+              onUnhover={()    => setNormLabels([])}
             />
           ) : (
             <div style={{ width: '100%', height: '100%' }} />
           )}
+          {/* TradingView 스타일 Y축 라벨 */}
+          {normLabels.map((lbl, i) => (
+            <div key={i} style={{
+              position: 'absolute', right: 2,
+              top: lbl.yPx, transform: 'translateY(-50%)',
+              background: lbl.color, color: '#fff',
+              fontSize: '11px', fontWeight: 700,
+              padding: '2px 5px', borderRadius: 3,
+              pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10,
+            }}>
+              {lbl.text}
+            </div>
+          ))}
         </div>
+        {/* 정규화 그래프 범례 */}
+        {plotDataNormPack.traces.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', padding: '4px 10px 0' }}>
+            {plotDataNormPack.traces.map((t, idx) => (
+              <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 700, color: '#1f2b49' }}>
+                <span style={{ width: 16, height: 3, background: t.line.color, display: 'inline-block', borderRadius: 2, flexShrink: 0 }} />
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </aside>
   );

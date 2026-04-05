@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
 import Mainmap from './pages/Mainmap';
 import LeftPanel from './pages/LeftPanel';
+import { useLocalStorage } from './hooks/useLocalStorage';
 import { useBreakpoint } from './hooks/useBreakpoint';
 
 // 패널 컴포넌트
@@ -13,8 +14,9 @@ import ChartPanel from './pages/ChartPanel';
 function App() {
   const { isMobile, isTablet, isDesktop } = useBreakpoint();
 
-  const [mapCenter, setMapCenter] = useState({ lat: 37.5665, lng: 126.9780 });
-  const [selectedApt, setSelectedApt] = useState(null);
+  const [mapCenter, setMapCenter] = useLocalStorage('map_center', { lat: 37.5665, lng: 126.9780 });
+  const [mapLevel, setMapLevel] = useLocalStorage('map_level', 5);
+  const [selectedApt, setSelectedApt] = useLocalStorage('selected_apt', null);
 
   // 왼쪽 패널: 데스크탑 기본 열림, 모바일/태블릿 기본 닫힘
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(() => window.innerWidth >= 1200);
@@ -55,7 +57,7 @@ function App() {
   }, []);
 
   // 즐겨찾기
-  const [favApts, setFavApts] = useState([]);
+  const [favApts, setFavApts] = useLocalStorage('fav_apts', []);
   const addFavoriteApt = (row) => {
     if (!row) return;
     const aptKey = `${row.kaptName}_${row.bjdCode || ''}`;
@@ -128,6 +130,8 @@ function App() {
         <Mainmap
           mapCenter={mapCenter}
           setMapCenter={setMapCenter}
+          mapLevel={mapLevel}
+          setMapLevel={setMapLevel}
           onSelectApt={handleSelectApt}
         />
 

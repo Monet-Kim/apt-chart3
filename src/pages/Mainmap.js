@@ -10,6 +10,15 @@ import {
 } from './services/aptData';
 
 const fileCache = new Map();
+let code5MapCache = null;
+const loadCode5Map = async () => {
+  if (code5MapCache) return code5MapCache;
+  try {
+    const r = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+    if (r.ok) code5MapCache = await r.json();
+  } catch { /* 로드 실패 시 null 유지 */ }
+  return code5MapCache;
+};
 
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
@@ -25,19 +34,29 @@ const makeGridPoints = (bbox, n = 3) => {
   return pts;
 };
 
-// 포인트 → CSV 파일명 (카카오 역지오코딩)
+// 포인트 → CSV 파일명 (카카오 역지오코딩 + code5_map.json)
 const pointToFile = (pt) => new Promise((resolve) => {
   const geocoder = new window.kakao.maps.services.Geocoder();
-  geocoder.coord2RegionCode(pt.lng, pt.lat, (res, status) => {
+  geocoder.coord2RegionCode(pt.lng, pt.lat, async (res, status) => {
+    const fallback = `${R2_BASE}/KaptList/서울특별시_송파구_11710_list_coord.csv`;
     if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
-      resolve(`${R2_BASE}/coordinput/서울특별시_송파구_11710_list_coord.csv`);
+      resolve(fallback);
       return;
     }
     const b = res.find(r => r.region_type === 'B') || res[0];
+    const code5 = (b.code || '').slice(0, 5) || '11710';
+
+    // code5_map.json에서 정확한 파일명 조회
+    const map = await loadCode5Map();
+    if (map?.[code5]) {
+      resolve(`${R2_BASE}/KaptList/${map[code5]}`);
+      return;
+    }
+
+    // 폴백: s1_s2_code5 조합
     const s1 = b.region_1depth_name || '서울특별시';
     const s2 = b.region_2depth_name || '송파구';
-    const code5 = (b.code || '').slice(0, 5) || '11710';
-    resolve(`${R2_BASE}/coordinput/${s1}_${s2}_${code5}_list_coord.csv`);
+    resolve(`${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`);
   });
 });
 
@@ -60,9 +79,9 @@ const loadFile = async (file) => {
 };
 
 
-function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
+function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }) {
   const mapRef = useRef(null);
-  const [level, setLevel] = useState(5);
+  const [level, setLevel] = useState(mapLevel ?? 5);
   const [markers, setMarkers] = useState([]);
   const [loading, setLoading] = useState(false);
   // kaptKey → { area, price } 마커 가격 캐시
@@ -93,8 +112,8 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
 
   // 마커 배열에 대해 code5 단위로 워크북 로드 후 면적·가격 계산
   const loadMarkerPrices = async (newMarkers, loadId, zoomLevel) => {
-    // 줌 레벨 5 이상은 마커가 너무 많아 스킵
-    if (zoomLevel > 4) return;
+    // 줌 레벨 4 이상은 이름만 표시 → 가격 로드 불필요
+    if (zoomLevel > 3) return;
 
     // 이미 완료된 마커 제외 후 최대 20개만
     const uncached = newMarkers
@@ -221,9 +240,15 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
         level={level}
         onCenterChanged={(map) => {
           setMapCenter({ lat: map.getCenter().getLat(), lng: map.getCenter().getLng() });
-          setLevel(map.getLevel());
+          const lv = map.getLevel();
+          setLevel(lv);
+          setMapLevel(lv);
         }}
-        onZoomChanged={(map) => setLevel(map.getLevel())}
+        onZoomChanged={(map) => {
+          const lv = map.getLevel();
+          setLevel(lv);
+          setMapLevel(lv);
+        }}
         onIdle={onIdle}
       >
         {loading && (
@@ -257,8 +282,8 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
             );
           }
 
-          // 레벨 5: 이름만
-          if (level === 5) {
+          // 레벨 4~5: 이름만
+          if (level >= 4) {
             return (
               <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5} clickable>
                 <div style={labelStyle} onClick={() => selectRow(row)}>
@@ -268,7 +293,7 @@ function Mainmap({ mapCenter, setMapCenter, onSelectApt }) {
             );
           }
 
-          // 레벨 1~4: 이름 + 면적 + 가격
+          // 레벨 1~3: 이름 + 면적 + 가격
           const key = `${row['kaptName']}_${row['bjdCode'] || ''}`;
           const info = markerPrices.get(key);
           return (
