@@ -26,7 +26,10 @@ function App() {
 
   // 오른쪽 오버레이 패널: 'login' | 'chart' | 'board' | null
   const [openPanel, setOpenPanel] = useState(null);
-  const togglePanel = (key) => setOpenPanel(prev => (prev === key ? null : key));
+  const togglePanel = (key) => {
+    setOpenPanel(prev => (prev === key ? null : key));
+    if (!isDesktop) setIsLeftPanelOpen(false);
+  };
   const closePanel = () => setOpenPanel(null);
 
   // 즐겨찾기
@@ -44,8 +47,11 @@ function App() {
 
   const handleSelectApt = useCallback((row) => {
     setSelectedApt(row || null);
-    // 모바일/태블릿: 아파트 선택 시 LeftPanel 자동 열기
-    if (row && !isDesktop) setIsLeftPanelOpen(true);
+    // 모바일/태블릿: 아파트 선택 시 LeftPanel 자동 열기, 다른 패널 닫기
+    if (row && !isDesktop) {
+      setIsLeftPanelOpen(true);
+      setOpenPanel(null);
+    }
   }, [isDesktop]);
 
   const panelButtons = [
