@@ -164,10 +164,10 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const rawList = listAreasForPnu(wb, _pnu, selectedApt['kaptName'] || null, _pdWb);
         if (!rawList.length) { setPnuErr('data가 없습니다_면적 후보 없음'); return; }
 
-        const repAreas = groupAreasToRep(rawList, 0.5);
+        const repAreas = groupAreasToRep(rawList);
         setAreas(repAreas);
 
-        // ── 최근 1년 면적별 거래량 집계 → Hot 순위
+        // ── 최근 1년 면적별 거래량 집계 → Hot 순위 (Rdata + Pdata 통합)
         {
           const cutoff = (() => {
             const d = new Date();
@@ -177,6 +177,8 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
           const pnuStr = _pnu ? String(_pnu) : null;
           const normName = selectedApt['kaptName'] ? normAptNm(selectedApt['kaptName']) : null;
           const volMap = new Map(); // areaNorm -> count
+
+          // Rdata 집계
           for (const obj of (wb || [])) {
             const match =
               (pnuStr && String(obj.pnu).trim() === pnuStr) ||
@@ -184,15 +186,28 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
             if (!match) continue;
             const yy = String(obj.dealYear || '').padStart(4, '0');
             const mm = String(obj.dealMonth || '').padStart(2, '0');
-            const ym = `${yy}-${mm}`;
-            if (ym < cutoff) continue;
+            if (`${yy}-${mm}` < cutoff) continue;
             const ar = parseFloat(obj.excluUseAr);
             if (!Number.isFinite(ar)) continue;
-            // 대표 면적에 매핑
-            const rep = repAreas.find(r => Math.abs(r - ar) <= 0.5);
+            const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
             if (rep == null) continue;
             volMap.set(rep, (volMap.get(rep) || 0) + 1);
           }
+
+          // Pdata 집계 (취소 거래 제외)
+          for (const obj of (_pdWb || [])) {
+            if (parseFloat(obj.isCanceled) === 1) continue;
+            if (normName && normAptNm(obj.aptNm) !== normName) continue;
+            const yy = String(obj.dealYear || '').padStart(4, '0');
+            const mm = String(obj.dealMonth || '').padStart(2, '0');
+            if (`${yy}-${mm}` < cutoff) continue;
+            const ar = parseFloat(obj.excluUseAr);
+            if (!Number.isFinite(ar)) continue;
+            const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+            if (rep == null) continue;
+            volMap.set(rep, (volMap.get(rep) || 0) + 1);
+          }
+
           const sorted = [...volMap.entries()].sort((a, b) => b[1] - a[1]);
           setHotAreas(sorted.slice(0, 2).map(([area]) => area));
         }
@@ -204,7 +219,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const agg = aggregateTradesForArea({
           wb, pdWb: _pdWb, pnu: _pnu,
           kaptName: selectedApt['kaptName'] || null,
-          areaNorm: initArea, areaTol: 0.5, smoothWindow,
+          areaNorm: initArea, smoothWindow,
         });
         if (!cancelled) {
           setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
@@ -234,7 +249,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const agg = aggregateTradesForArea({
           wb, pdWb: pdWbRef.current, pnu,
           kaptName: selectedApt['kaptName'] || null,
-          areaNorm: selArea, areaTol: 0.5, smoothWindow,
+          areaNorm: selArea, smoothWindow,
         });
         if (!cancelled) {
           setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
@@ -260,7 +275,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       const agg = aggregateTradesForArea({
         wb, pdWb: pdWbRef.current, pnu,
         kaptName: selectedApt['kaptName'] || null,
-        areaNorm: area, areaTol: 0.5, smoothWindow,
+        areaNorm: area, smoothWindow,
       });
       setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
       setPtsX(agg.ptsX); setPtsY(agg.ptsY);

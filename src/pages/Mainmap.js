@@ -150,14 +150,14 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
           if (!pnu) continue;
 
           const rawAreas = listAreasForPnu(wb, pnu, row['kaptName'] || null);
-          const repAreas = groupAreasToRep(rawAreas, 0.5);
+          const repAreas = groupAreasToRep(rawAreas);
           const area = pickInitialArea(repAreas); // 84㎡에 가장 가까운 면적
           if (!area) continue;
 
           const agg = aggregateTradesForArea({
             wb, pdWb, pnu,
             kaptName: row['kaptName'] || null,
-            areaNorm: area, areaTol: 0.5, smoothWindow: 3,
+            areaNorm: area, smoothWindow: 3,
           });
 
           // 가장 최근 유효 평균가

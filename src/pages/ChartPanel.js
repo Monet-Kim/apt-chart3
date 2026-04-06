@@ -123,11 +123,11 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       const { wb } = rResult.value;
       const pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
       const rawList = listAreasForPnu(wb, pnu, fav.kaptName || null, pdWb);
-      const list = groupAreasToRep(rawList, 0.5);
+      const list = groupAreasToRep(rawList);
       setAreasByKey(prev => ({ ...prev, [fav.key]: list }));
       if (!list.length) setErrMsg('면적 목록이 없습니다.');
 
-      // 최근 1년 면적별 거래량 → Hot 순위 계산
+      // 최근 1년 면적별 거래량 → Hot 순위 계산 (Rdata + Pdata 통합)
       const cutoff = (() => {
         const d = new Date(); d.setFullYear(d.getFullYear() - 1);
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -135,6 +135,8 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       const pnuStr = pnu ? String(pnu) : null;
       const normName = fav.kaptName ? normAptNm(fav.kaptName) : null;
       const volMap = new Map();
+
+      // Rdata 집계
       for (const obj of (wb || [])) {
         const match = (pnuStr && String(obj.pnu).trim() === pnuStr) ||
                       (normName && normAptNm(obj.aptNm) === normName);
@@ -144,10 +146,25 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         if (`${yy}-${mm}` < cutoff) continue;
         const ar = parseFloat(obj.excluUseAr);
         if (!Number.isFinite(ar)) continue;
-        const rep = list.find(r => Math.abs(r - ar) <= 0.5);
+        const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
         if (rep == null) continue;
         volMap.set(rep, (volMap.get(rep) || 0) + 1);
       }
+
+      // Pdata 집계 (취소 거래 제외)
+      for (const obj of (pdWb || [])) {
+        if (parseFloat(obj.isCanceled) === 1) continue;
+        if (normName && normAptNm(obj.aptNm) !== normName) continue;
+        const yy = String(obj.dealYear || '').padStart(4, '0');
+        const mm = String(obj.dealMonth || '').padStart(2, '0');
+        if (`${yy}-${mm}` < cutoff) continue;
+        const ar = parseFloat(obj.excluUseAr);
+        if (!Number.isFinite(ar)) continue;
+        const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+        if (rep == null) continue;
+        volMap.set(rep, (volMap.get(rep) || 0) + 1);
+      }
+
       const hotTop2 = [...volMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([area]) => area);
       setHotAreasByKey(prev => ({ ...prev, [fav.key]: hotTop2 }));
     } catch {
@@ -183,7 +200,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       const pack = aggregateTradesForArea({
         wb, pdWb: _pdWb, pnu,
         kaptName: fav.kaptName || null,
-        areaNorm, areaTol: 0.5, smoothWindow,
+        areaNorm, smoothWindow,
       });
       const id = `${fav.key}#${areaNorm}`;
       setSeries(prev => {

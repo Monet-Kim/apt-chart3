@@ -47,13 +47,33 @@ export const normAptNm = (s) =>
 export const floor1 = (x) => Math.floor(x * 10) / 10;
 
 // 면적들을 ±tol㎡로 묶고 각 그룹의 평균(대표값)을 반환
-export function groupAreasToRep(areas, tol = 0.5) {
+// 면적별 차등 tolerance: 85㎡ 이하 ±0.9㎡, 초과 ±1%
+const areaTolFor = (ref) => ref <= 85 ? 0.9 : ref * 0.01;
+
+// PNU 매칭 Rdata와 aptNm 매칭 Pdata의 aptNm이 다를 때:
+// Pdata 최초 거래일 > Rdata 최종 거래일 이면 Rdata는 구 단지 데이터 → drop
+function shouldDropRdataDiffPnu(rPnuRows, pdNameRows) {
+  if (!rPnuRows?.length || !pdNameRows?.length) return false;
+  let maxR = null, minP = null;
+  for (const obj of rPnuRows) {
+    const ym = `${String(obj.dealYear || '').padStart(4, '0')}-${String(obj.dealMonth || '').padStart(2, '0')}`;
+    if (!maxR || ym > maxR) maxR = ym;
+  }
+  for (const obj of pdNameRows) {
+    if (toNum(obj.isCanceled) === 1) continue;
+    const ym = `${String(obj.dealYear || '').padStart(4, '0')}-${String(obj.dealMonth || '').padStart(2, '0')}`;
+    if (!minP || ym < minP) minP = ym;
+  }
+  return maxR !== null && minP !== null && minP > maxR;
+}
+
+export function groupAreasToRep(areas) {
   if (!areas?.length) return [];
   const sorted = [...areas].sort((a, b) => a - b);
   const reps = [];
   let g = [sorted[0]];
   for (let i = 1; i < sorted.length; i++) {
-    if (Math.abs(sorted[i] - g[g.length - 1]) <= tol) g.push(sorted[i]);
+    if (Math.abs(sorted[i] - g[g.length - 1]) <= areaTolFor(g[g.length - 1])) g.push(sorted[i]);
     else { reps.push(g.reduce((a, b) => a + b, 0) / g.length); g = [sorted[i]]; }
   }
   reps.push(g.reduce((a, b) => a + b, 0) / g.length);
@@ -154,24 +174,35 @@ export async function fetchPdata(as1, as2, code5) {
 }
 
 // 특정 pnu의 전용면적 목록(버림 1자리, 오름차순)
-// Rdata PNU/aptNm 매칭 + Pdata aptNm 매칭 결과를 항상 union
-// (다필지 단지, 신규단지 분양권 거래만 존재하는 대형 평형 누락 방지)
 export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
   const set = new Set();
   const pnuStr = pnu ? String(pnu) : null;
+  const targetNorm = kaptName ? normAptNm(kaptName) : null;
 
-  // Rdata PNU 매칭
+  // Pdata aptNm 매칭 행 (재건축 판별에도 사용)
+  const pdNameRows = (pdWb && targetNorm)
+    ? pdWb.filter(obj => toNum(obj.isCanceled) !== 1 && normAptNm(obj.aptNm) === targetNorm)
+    : [];
+
+  // PNU로 찾은 Rdata 중 aptNm이 다른 행 → 재건축 여부 판별 대상
+  const rPnuDiffRows = (pnuStr && targetNorm)
+    ? (wb || []).filter(obj => String(obj.pnu).trim() === pnuStr && normAptNm(obj.aptNm) !== targetNorm)
+    : [];
+  const dropRdataDiffPnu = shouldDropRdataDiffPnu(rPnuDiffRows, pdNameRows);
+
+  // Rdata PNU 매칭 (aptNm 같으면 항상 포함, 다르면 재건축 판별 결과에 따라)
   if (pnuStr) {
     for (const obj of (wb || [])) {
       if (String(obj.pnu).trim() !== pnuStr) continue;
+      const sameNm = targetNorm && normAptNm(obj.aptNm) === targetNorm;
+      if (!sameNm && dropRdataDiffPnu) continue; // 구 단지 데이터 drop
       const ar = toNum(obj.excluUseAr);
       if (Number.isFinite(ar)) set.add(floor1(ar));
     }
   }
 
-  // Rdata aptNm 매칭
-  if (kaptName) {
-    const targetNorm = normAptNm(kaptName);
+  // Rdata aptNm 매칭 (다필지 단지 대응)
+  if (targetNorm) {
     for (const obj of (wb || [])) {
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
       const ar = toNum(obj.excluUseAr);
@@ -179,15 +210,10 @@ export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
     }
   }
 
-  // Pdata aptNm 매칭 (분양권 전매 거래 포함 — 신규 단지 대형 평형 누락 방지)
-  if (pdWb && kaptName) {
-    const targetNorm = normAptNm(kaptName);
-    for (const obj of pdWb) {
-      if (toNum(obj.isCanceled) === 1) continue;
-      if (normAptNm(obj.aptNm) !== targetNorm) continue;
-      const ar = toNum(obj.excluUseAr);
-      if (Number.isFinite(ar)) set.add(floor1(ar));
-    }
+  // Pdata aptNm 매칭 (신규 단지·분양권 전매 포함)
+  for (const obj of pdNameRows) {
+    const ar = toNum(obj.excluUseAr);
+    if (Number.isFinite(ar)) set.add(floor1(ar));
   }
 
   return Array.from(set).sort((a, b) => a - b);
@@ -221,7 +247,8 @@ function centeredSMA(arr, w) {
   });
 }
 
-export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, areaNorm, areaTol = 0.5, smoothWindow = 3 }) {
+export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, areaNorm, areaTol = null, smoothWindow = 3 }) {
+  const tol = areaTol ?? areaTolFor(areaNorm);
   const cacheKey = `${pnu}#${areaNorm}#${pdWb ? '1' : '0'}#${smoothWindow}`;
   if (tradeCache.has(cacheKey)) return tradeCache.get(cacheKey);
 
@@ -237,13 +264,25 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   // ── Rdata 집계 ──────────────────────────────────────────
   const rPtsX = [], rPtsY = [];
 
-  // PNU 매칭 + aptNm 매칭 union (다필지 단지 대응)
   const pnuStr = pnu ? String(pnu) : null;
   const rNormName = kaptName ? normAptNm(kaptName) : null;
 
+  // PNU 매칭 중 aptNm이 다른 행 → 재건축 여부 판별
+  const rPnuDiffRows = (pnuStr && rNormName)
+    ? (wb || []).filter(obj => String(obj.pnu).trim() === pnuStr && normAptNm(obj.aptNm) !== rNormName)
+    : [];
+  const pdNameRows = (pdWb && rNormName)
+    ? pdWb.filter(obj => toNum(obj.isCanceled) !== 1 && normAptNm(obj.aptNm) === rNormName)
+    : [];
+  const dropRdataDiffPnu = shouldDropRdataDiffPnu(rPnuDiffRows, pdNameRows);
+
+  // aptNm 일치 → 항상 포함 / PNU 일치 + aptNm 다름 → 재건축 판별 결과에 따라
   const rMatches = (obj) => {
-    if (pnuStr && String(obj.pnu).trim() === pnuStr) return true;
     if (rNormName && normAptNm(obj.aptNm) === rNormName) return true;
+    if (pnuStr && String(obj.pnu).trim() === pnuStr) {
+      if (dropRdataDiffPnu) return false; // 구 단지 데이터 drop
+      return true;
+    }
     return false;
   };
 
@@ -251,7 +290,7 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     if (!rMatches(obj)) continue;
 
     const ar = toNum(obj.excluUseAr);
-    if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > areaTol) continue;
+    if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > tol) continue;
 
     const yy = toNum(obj.dealYear), mm = toNum(obj.dealMonth);
     if (!Number.isFinite(yy) || !Number.isFinite(mm)) continue;
@@ -286,7 +325,7 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
 
       const ar = toNum(obj.excluUseAr);
-      if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > areaTol) continue;
+      if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > tol) continue;
 
       const yy = toNum(obj.dealYear), mm = toNum(obj.dealMonth);
       if (!Number.isFinite(yy) || !Number.isFinite(mm)) continue;
