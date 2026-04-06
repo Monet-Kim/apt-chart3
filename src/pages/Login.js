@@ -25,37 +25,18 @@ function Login({ onClose }) {
 
   return (
     <div style={commonPanelStyle}>
-      {/* 닫기버튼 - 패널 오른쪽 상단 */}
-      <button
-        onClick={onClose}
-        style={{
-          position: 'absolute',
-          top: 18,
-          right: 22,
-          color: '#6476FF',
-          background: 'none',
-          border: 'none',
-          fontWeight: 900,
-          cursor: 'pointer',
-          fontSize: '1.15rem',
-          width: 28,
-          height: 28,
-          borderRadius: 7,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          transition: 'background 0.13s',
-          zIndex: 100
-        }}
-        title="닫기"
-        aria-label="닫기"
-        onMouseOver={e => e.currentTarget.style.background = "#e8eefa"}
-        onMouseOut={e => e.currentTarget.style.background = "none"}
-      >✕</button>
+      {/* 헤더 */}
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 16px', height: 52, borderBottom: '1.5px solid #E6DED4' }}>
+        <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#1F1D1B', flex: 1 }}>👤 로그인</span>
+        <button
+          onClick={onClose}
+          style={{ width: 34, height: 34, border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.1rem', color: '#6B625B', borderRadius: 8 }}
+          title="닫기" aria-label="닫기"
+        >✕</button>
+      </div>
 
-        <div style={{
-            flex: 1, display:'flex',alignItems:'center',justifyContent:'center'
-        }}>    
+      {/* 컨텐츠 */}
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <KakaoLogin
         token={'f1025a0cbda23e99081d3fdbc8f1344d'} // ← 실제 앱키로 변경
         onSuccess={handleSuccess}
@@ -84,7 +65,7 @@ function Login({ onClose }) {
           
         )}
       />
-    </div>
+      </div>
     </div>
   );
 }

@@ -6,8 +6,24 @@ import { trimAptName } from '../utils/aptNameUtils';
 import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
-  aggregateTradesForArea, pickInitialArea, groupAreasToRep,
+  aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
 } from './services/aptData';
+
+/* Hot 레이블 흔들림 애니메이션 */
+const hotKeyframes = `
+@keyframes hotWiggle {
+  0%   { transform: rotate(-12deg) scale(1);   }
+  25%  { transform: rotate(-16deg) scale(1.08); }
+  50%  { transform: rotate(-12deg) scale(1);   }
+  75%  { transform: rotate(-8deg)  scale(1.08); }
+  100% { transform: rotate(-12deg) scale(1);   }
+}
+`;
+if (typeof document !== 'undefined') {
+  let s = document.getElementById('hot-wiggle-style');
+  if (!s) { s = document.createElement('style'); s.id = 'hot-wiggle-style'; document.head.appendChild(s); }
+  s.textContent = hotKeyframes;
+}
 
 function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavoriteApt, onClose, onOpenChartPanel, isMobile = false, isTablet = false }) {
   const aptKey = selectedApt
@@ -41,10 +57,14 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const [pPtsX, setPPtsX] = useState([]); // Pdata 산점
   const [pPtsY, setPPtsY] = useState([]);
 
-  // Pdata workbook (handleAreaClick 재사용을 위해 보관)
+  // workbook refs (handleAreaClick 재사용을 위해 보관)
   const pdWbRef = React.useRef(null);
+  const wbRef   = React.useRef(null);
   // 프로그래밍 방식 xRange 변경 시 onRelayout 피드백 루프 차단
   const skipRelayoutRef = React.useRef(false);
+
+  // Hot 면적 (최근 1년 거래량 순위 1·2위)
+  const [hotAreas, setHotAreas] = useState([]); // [1위면적, 2위면적]
 
   // 스무딩 윈도우
   const [smoothWindow, setSmoothWindow] = useState(3);
@@ -53,7 +73,6 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const [xRange, setXRange] = useState(null);
   const [yearWindow, setYearWindow] = useState(5);
   const [yRange, setYRange] = useState(null);
-  const [y2Range, setY2Range] = useState(null);
 
   const janLines = useMemo(() => {
     if (!x.length) return [];
@@ -79,10 +98,8 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   useEffect(() => {
     if (!x.length) return;
     const maxVol = Math.max(...vol, 0);
-    const maxPrice = Math.max(...avg, ...ptsY, 0);
     setYRange([0, maxVol > 0 ? maxVol * 4 : 10]);
-    setY2Range([0, maxPrice > 0 ? maxPrice * 1.3 : 10]);
-  }, [x, vol, avg, ptsX, ptsY]);
+  }, [x, vol]);
 
   // Kakao Places 준비
   const placesRef = React.useRef(null);
@@ -118,11 +135,12 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       setX([]); setVol([]); setAvg([]); setPtsX([]); setPtsY([]);
       setPPtsX([]); setPPtsY([]);
       pdWbRef.current = null;
+      wbRef.current   = null;
+      setHotAreas([]);
       setTradeErr(null);
       if (!selectedApt) return;
 
-      const { pnu: _pnu, reason } = buildPNU(selectedApt);
-      if (!_pnu) { setPnuErr(`data가 없습니다_${reason || 'pnu 생성 실패'}`); return; }
+      const { pnu: _pnu } = buildPNU(selectedApt);
       setPnu(_pnu);
 
       const bjdCode = String(selectedApt['bjdCode'] || '').trim();
@@ -141,12 +159,43 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const { wb } = rResult.value;
         const _pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
         pdWbRef.current = _pdWb;
+        wbRef.current   = wb;
 
         const rawList = listAreasForPnu(wb, _pnu, selectedApt['kaptName'] || null, _pdWb);
         if (!rawList.length) { setPnuErr('data가 없습니다_면적 후보 없음'); return; }
 
         const repAreas = groupAreasToRep(rawList, 0.5);
         setAreas(repAreas);
+
+        // ── 최근 1년 면적별 거래량 집계 → Hot 순위
+        {
+          const cutoff = (() => {
+            const d = new Date();
+            d.setFullYear(d.getFullYear() - 1);
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          })();
+          const pnuStr = _pnu ? String(_pnu) : null;
+          const normName = selectedApt['kaptName'] ? normAptNm(selectedApt['kaptName']) : null;
+          const volMap = new Map(); // areaNorm -> count
+          for (const obj of (wb || [])) {
+            const match =
+              (pnuStr && String(obj.pnu).trim() === pnuStr) ||
+              (normName && normAptNm(obj.aptNm) === normName);
+            if (!match) continue;
+            const yy = String(obj.dealYear || '').padStart(4, '0');
+            const mm = String(obj.dealMonth || '').padStart(2, '0');
+            const ym = `${yy}-${mm}`;
+            if (ym < cutoff) continue;
+            const ar = parseFloat(obj.excluUseAr);
+            if (!Number.isFinite(ar)) continue;
+            // 대표 면적에 매핑
+            const rep = repAreas.find(r => Math.abs(r - ar) <= 0.5);
+            if (rep == null) continue;
+            volMap.set(rep, (volMap.get(rep) || 0) + 1);
+          }
+          const sorted = [...volMap.entries()].sort((a, b) => b[1] - a[1]);
+          setHotAreas(sorted.slice(0, 2).map(([area]) => area));
+        }
 
         const initArea = pickInitialArea(repAreas);
         setSelArea(initArea);
@@ -175,7 +224,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
 
   // smoothWindow 변경 시 현재 면적으로 재집계
   useEffect(() => {
-    if (!pnu || !selectedApt || selArea === null) return;
+    if (!selectedApt || selArea === null) return;
     let cancelled = false;
     (async () => {
       try {
@@ -203,7 +252,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const handleAreaClick = async (area) => {
     setSelArea(area);
     setTradeErr(null);
-    if (!pnu || !selectedApt) return;
+    if (!selectedApt) return;
     try {
       setLoadingTrade(true);
       const bjdCode = String(selectedApt['bjdCode'] || '').trim();
@@ -229,14 +278,6 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     setYearWindow(prev => Math.max(1, prev + delta));
   };
 
-  const changeY2Max = (delta) => {
-    setY2Range(prev => {
-      if (!prev) return prev;
-      const [min, max] = prev;
-      return [min, Math.max(min + 1, max + delta)];
-    });
-  };
-
   const handleRelayout = (e) => {
     if (skipRelayoutRef.current) { skipRelayoutRef.current = false; return; }
     if (e['xaxis.range[0]'] && e['xaxis.range[1]']) {
@@ -251,13 +292,9 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
     };
     return [
-      ['주소', pick('kaptAddr')],
-      ['도로', pick('doroJuso')],
       ['세대', pick('kaptdaCnt')],
       ['난방', pick('codeHeatNm')],
       ['구조', pick('codeHallNm')],
-      ['시행', pick('kaptAcompany')],
-      ['시공', pick('kaptBcompany')],
     ].filter(([, v]) => v);
   }, [selectedApt]);
 
@@ -272,8 +309,8 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     <aside
       style={{
         width: '100%',
-        background: '#fff', borderRight: '1.5px solid #e0e0e0',
-        padding, overflowY: 'auto',
+        background: '#fff', borderRight: '1.5px solid #E6DED4',
+        padding, overflowY: isMobile ? 'scroll' : 'auto',
         display: 'flex', flexDirection: 'column', gap: 14,
         boxSizing: 'border-box', position: 'relative',
         height: '100%',
@@ -285,34 +322,34 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         style={{
           position: 'absolute', top: 8, right: 8,
           width: 44, height: 44, border: 'none', background: 'none',
-          cursor: 'pointer', fontSize: '1.2rem', color: '#6476FF',
+          cursor: 'pointer', fontSize: '1.2rem', color: '#6B625B',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           borderRadius: 8, zIndex: 2,
         }}
         title="닫기"
       >✕</button>
 
-      {/* 검색창 — 닫기 버튼 공간(44px) 확보를 위해 오른쪽 패딩 */}
+      {/* 검색창 — 닫기 버튼 공간(44px을 30으로 줄임) 확보를 위해 오른쪽 패딩 */}
       <form onSubmit={handleSearch} style={{ marginTop: 4, marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center', position: 'relative', paddingRight: 40 }}>
         <input
           type="text"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="아파트, 주소, 역, 학교 검색"
-          style={{ flex: 1, height: 48, padding: '0 14px', border: '1.5px solid #e0e0e0', borderRadius: 10, fontSize: '1rem', outline: 'none', boxSizing: 'border-box' }}
+          style={{ flex: 1, height: 30, padding: '0 14px', border: '1.5px solid #E6DED4', borderRadius: 10, fontSize: '1rem', outline: 'none', boxSizing: 'border-box' }}
           autoComplete="off"
         />
         <button
           type="submit"
-          style={{ height: 48, background: '#6476FF', color: '#fff', fontWeight: 700, border: 'none', borderRadius: 10, padding: '0 18px', fontSize: '1rem', cursor: 'pointer', flexShrink: 0 }}
+          style={{ height: 30, background: '#6B625B', color: '#fff', fontWeight: 700, border: 'none', borderRadius: 10, padding: '0 18px', fontSize: '1rem', cursor: 'pointer', flexShrink: 0 }}
         >
           검색
         </button>
         {suggestions.length > 0 && (
           <ul style={{ position: 'absolute', top: '110%', left: 0, right: 40, background: '#fff', border: '1px solid #dbe5f5', borderRadius: 10, boxShadow: '0 4px 16px 0 #dbe5f533', zIndex: 99, listStyle: 'none', margin: 0, padding: 0 }}>
             {suggestions.map((item) => (
-              <li key={item.id} onClick={() => handleSuggestionClick(item)} style={{ padding: '14px 14px', cursor: 'pointer', fontSize: '0.97rem', borderBottom: '1px solid #f0f4ff' }}>
-                {item.place_name} <span style={{ color: '#888', fontSize: '0.88rem' }}>({item.address_name})</span>
+              <li key={item.id} onClick={() => handleSuggestionClick(item)} style={{ padding: '14px 14px', cursor: 'pointer', fontSize: '0.97rem', borderBottom: '1px solid #E6DED4' }}>
+                {item.place_name} <span style={{ color: '#C9BFB4', fontSize: '0.88rem' }}>({item.address_name})</span>
               </li>
             ))}
           </ul>
@@ -328,31 +365,49 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
             <div style={{ fontSize: '1.45rem', fontWeight: 800 }}>{trimAptName(selectedApt.kaptName)}</div>
             <button
               onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
-              style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.35rem', color: isFav ? '#f5c518' : '#bbb', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0, padding: '4px 6px', position: 'relative', overflow: 'visible' }}
               title="단지 즐겨찾기"
             >
-              {isFav ? '★' : '☆'}
+              <span style={{ fontSize: '1.35rem', color: isFav ? '#f5c518' : '#C9BFB4', lineHeight: 1, display: 'block' }}>{isFav ? '★' : '☆'}</span>
+              <span style={{
+                position: 'absolute',
+                top: 3,
+                right: -55,
+                color: '#c0392b',
+                fontSize: '0.9rem',
+                fontWeight: 1000,
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                transformOrigin: 'center center',
+                transform: 'rotate(-12deg)',
+                lineHeight: 1,
+              }}>
+                {isFav ? '추가완료' : '관심추가'}
+              </span>
             </button>
           </div>
 
           {/* 기본정보 */}
-          <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr', columnGap: 8, rowGap: 6, fontSize: '0.93rem', lineHeight: 1.35, color: '#1f2b49', padding: '10px 10px', borderRadius: 10, maxHeight: 150, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: '0.88rem', lineHeight: 1.4, color: '#1F1D1B', padding: '6px 10px', borderRadius: 10 }}>
             {infoPairs.map(([k, v]) => (
-              <React.Fragment key={k}>
-                <div style={{ color: '#6a7692', fontWeight: 800, textAlign: 'left' }}>{k}</div>
-                <div style={{ color: '#1f2b49', fontWeight: 700, textAlign: 'left', wordBreak: 'keep-all' }}>
+              <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <span style={{ color: '#6B625B', fontWeight: 800 }}>{k}</span>
+                <span style={{ color: '#1F1D1B', fontWeight: 700 }}>
                   {k === '세대' ? String(v).replace(/\.0+$/, '') : v}
-                </div>
-              </React.Fragment>
+                </span>
+              </span>
             ))}
+            <button style={{ marginLeft: 'auto', flexShrink: 0, height: 26, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 8, background: '#F7F3EE', color: '#6B625B', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' }}>
+              추가정보
+            </button>
           </div>
           {pnuErr && <div style={{ color: '#c33', marginTop: 6, fontSize: '0.92rem' }}>{pnuErr}</div>}
 
           {/* 전용면적 선택 */}
           <div style={{ marginTop: 8, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center', fontWeight: 900, fontSize: '1.05rem', color: '#1f2b49', marginBottom: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center', fontWeight: 900, fontSize: '1.05rem', color: '#1F1D1B', marginBottom: 4 }}>
               <span>전용면적 선택</span>
-              {areaRangeText && <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#6a7692' }}>{areaRangeText}</span>}
+              {areaRangeText && <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#6B625B' }}>{areaRangeText}</span>}
             </div>
             <div
               ref={areaScrollRef}
@@ -363,63 +418,80 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
               onTouchStart={onAreaTouchStart}
               onTouchMove={onAreaTouchMove}
               onTouchEnd={endAreaTouchDrag}
-              style={{ display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'hidden', padding: '6px 4px', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin', cursor: dragRef.current?.down ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'pan-x', borderRadius: 10 }}
+              style={{ display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'visible', padding: '14px 4px 6px', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin', cursor: dragRef.current?.down ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'pan-x', borderRadius: 10 }}
             >
               {areas.map((a) => {
-                const active = selArea === a;
+                const active   = selArea === a;
+                const hotRank  = hotAreas.indexOf(a); // 0=1위, 1=2위, -1=없음
+                const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
+                const hotColor = hotRank === 0 ? '#c0392b' : '#b35a00';
                 return (
                   <button
                     key={a}
                     onClick={() => handleAreaClick(a)}
                     onMouseDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    style={{ flex: '0 0 auto', minWidth: isMobile ? 56 : 72, height: isMobile ? 32 : 44, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 10, fontWeight: 900, fontSize: isMobile ? '0.80rem' : '0.95rem', cursor: 'pointer', border: active ? '2px solid #6476FF' : '1px solid #dbe5f5', background: active ? '#6476FF' : '#f7faff', color: active ? '#fff' : '#1f2b49', boxShadow: active ? '0 6px 16px rgba(100,118,255,0.22)' : 'none', transition: 'transform 0.08s ease' }}
+                    style={{
+                      flex: '0 0 auto',
+                      minWidth: isMobile ? 45 : 55,
+                      height: isMobile ? 28 : 30,
+                      padding: isMobile ? '0 6px' : '0 8px',
+                      borderRadius: 10,
+                      fontWeight: 900,
+                      fontSize: isMobile ? '0.75rem' : '0.88rem',
+                      cursor: 'pointer',
+                      border: active ? '2px solid #6B625B' : '1px solid #E6DED4',
+                      background: active ? '#6B625B' : '#F7F3EE',
+                      color: active ? '#fff' : '#1F1D1B',
+                      boxShadow: active ? '0 6px 16px rgba(107,98,91,0.22)' : 'none',
+                      transition: 'transform 0.08s ease',
+                      position: 'relative',
+                      overflow: 'visible',
+                      boxSizing: 'content-box',
+                    }}
                   >
                     {a.toFixed(1)}㎡
+                    {hotLabel && (
+                      <span style={{
+                        position: 'absolute',
+                        top: -5,
+                        right: 30,
+                        color: hotColor,
+                        fontSize: '0.7rem',
+                        fontWeight: 900,
+                        whiteSpace: 'nowrap',
+                        pointerEvents: 'none',
+                        transformOrigin: 'center center',
+                        transform: 'rotate(-12deg)',
+                        lineHeight: 1,
+                      }}>
+                        {hotLabel}
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
-            <div style={{ marginTop: 6, fontSize: '0.85rem', color: '#6a7692' }}>좌우로 스와이프(드래그)해서 면적을 선택해.</div>
+            <div style={{ marginTop: 6, fontSize: '0.85rem', color: '#6B625B' }}>좌우로 스와이프(드래그)해서 면적을 선택해.</div>
           </div>
 
           {/* 그래프 */}
-          <div style={{ width: '100%', height: isMobile ? 320 : isTablet ? 300 : 360, minHeight: isMobile ? 320 : 200, flexShrink: 0, background: '#fff', borderRadius: 8, marginTop: 4, display: 'flex', flexDirection: 'column' }}>
-            {(loadingTrade || loadingInfo) && <div style={{ padding: 12, color: '#6476FF' }}>로딩 중…</div>}
+          <div style={{ width: '100%', height: isMobile ? 448 : isTablet ? 300 : 500, minHeight: isMobile ? 448 : 300, flexShrink: 0, background: '#fff', borderRadius: 8, marginTop: 4, display: 'flex', flexDirection: 'column' }}>
+            {(loadingTrade || loadingInfo) && <div style={{ padding: 12, color: '#6B625B' }}>로딩 중…</div>}
             {tradeErr && <div style={{ padding: 12, color: '#c33' }}>{tradeErr}</div>}
 
             {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
               <>
-                {/* 컨트롤 3줄 */}
-                <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3, padding: '6px 10px 4px', fontSize: '0.78rem', color: '#444' }}>
-                  {/* 공통 버튼 스타일 */}
-                  {/* 1줄: X축 기간 조정 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ minWidth: 76, fontWeight: 700, color: '#1f2b49' }}>X축 기간 조정</span>
-                    <button onClick={() => changeYearWindow(-1)} style={{ height: 36, padding: '0 10px', border: '1px solid #d0d7e2', borderRadius: 6, background: '#f7f9fc', cursor: 'pointer' }}>– 1년</button>
-                    <span style={{ minWidth: 44, textAlign: 'center' }}>최근 {yearWindow}년</span>
-                    <button onClick={() => changeYearWindow(+1)} style={{ height: 36, padding: '0 10px', border: '1px solid #d0d7e2', borderRadius: 6, background: '#f7f9fc', cursor: 'pointer' }}>+ 1년</button>
-                  </div>
-                  {/* 2줄: 평균가 스무딩 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ minWidth: 76, fontWeight: 700, color: '#1f2b49' }}>평균가 스무딩</span>
-                    {[1, 3, 6].map(w => (
-                      <button key={w} onClick={() => setSmoothWindow(w)}
-                        style={{ height: 36, padding: '0 10px', border: '1px solid #d0d7e2', borderRadius: 6, background: smoothWindow === w ? '#6476FF' : '#f7f9fc', color: smoothWindow === w ? '#fff' : '#444', cursor: 'pointer' }}>
-                        {w === 1 ? '없음' : `${w}M`}
-                      </button>
-                    ))}
-                  </div>
-                  {/* 3줄: Max값 조정 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ minWidth: 76, fontWeight: 700, color: '#1f2b49' }}>Max값 조정</span>
-                    <button onClick={() => changeY2Max(-1)} style={{ height: 36, padding: '0 10px', border: '1px solid #d0d7e2', borderRadius: 6, background: '#f7f9fc', cursor: 'pointer' }}>-1억</button>
-                    <button onClick={() => changeY2Max(+1)} style={{ height: 36, padding: '0 10px', border: '1px solid #d0d7e2', borderRadius: 6, background: '#f7f9fc', cursor: 'pointer' }}>+1억</button>
-                  </div>
+                {/* 컨트롤: X축 기간 조정 */}
+                <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px 4px', fontSize: '0.78rem', color: '#6B625B' }}>
+                  <span style={{ minWidth: 76, fontWeight: 700, color: '#1F1D1B' }}>X축 기간 조정</span>
+                  <button onClick={() => changeYearWindow(-1)} style={{ height: 36, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer' }}>– 1년</button>
+                  <span style={{ minWidth: 44, textAlign: 'center' }}>최근 {yearWindow}년</span>
+                  <button onClick={() => changeYearWindow(+1)} style={{ height: 36, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer' }}>+ 1년</button>
                 </div>
 
                 <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-                  <div style={{ position: 'absolute', top: 4, left: 10, zIndex: 6, display: 'flex', gap: 12, alignItems: 'center', fontSize: '0.80rem', fontWeight: 800, color: '#1f2b49', pointerEvents: 'none', background: 'rgba(255,255,255,0.75)', padding: '2px 6px', borderRadius: 6 }}>
+                  <div style={{ position: 'absolute', top: 4, left: 10, zIndex: 6, display: 'flex', gap: 12, alignItems: 'center', fontSize: '0.80rem', fontWeight: 800, color: '#1F1D1B', pointerEvents: 'none', background: 'rgba(247,243,238,0.85)', padding: '2px 6px', borderRadius: 6 }}>
                     <span style={{ color: '#1f77b4' }}>■ 거래량</span>
                     <span style={{ color: '#ff7f0e' }}>━ 평균가</span>
                     <span style={{ color: '#ff7f0e' }}>● 실거래</span>
@@ -444,10 +516,10 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
                       dragmode: 'pan',
                       showlegend: false,
                       hovermode: 'x unified',
-                      hoverlabel: { bgcolor: '#1f2b49', bordercolor: '#6476FF', font: { color: '#fff', size: 12 }, namelength: -1 },
-                      xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6476FF', spikedash: 'solid', spikethickness: 1 },
+                      hoverlabel: { bgcolor: '#1F1D1B', bordercolor: '#6B625B', font: { color: '#fff', size: 12 }, namelength: -1 },
+                      xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6B625B', spikedash: 'solid', spikethickness: 1 },
                       yaxis: { ticksuffix: '건', tickfont: { size: 9 }, showgrid: false, rangemode: 'tozero', autorange: false, range: yRange || undefined, showticklabels: false, fixedrange: true, showspikes: false },
-                      yaxis2: { overlaying: 'y', side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
+                      yaxis2: { overlaying: 'y', side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
                     }}
                     useResizeHandler
                     style={{ width: '100%', height: '100%' }}
@@ -467,11 +539,11 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         <div style={{ marginTop: 10, padding: '6px 4px' }}>
           <div
             onClick={onOpenChartPanel}
-            style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 6, color: '#384056', cursor: 'pointer', display: 'inline-block' }}
+            style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 6, color: '#6B625B', cursor: 'pointer', display: 'inline-block' }}
           >⭐ 즐겨찾기 단지 차트비교</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {favApts.map(fav => (
-              <div key={fav.key} style={{ padding: '4px 9px', borderRadius: 14, background: '#f0f4ff', fontSize: '0.85rem', fontWeight: 600, color: '#1f2b49' }}>
+              <div key={fav.key} style={{ padding: '4px 9px', borderRadius: 14, background: '#E6DED4', fontSize: '0.85rem', fontWeight: 600, color: '#1F1D1B' }}>
                 {trimAptName(fav.kaptName)}
               </div>
             ))}

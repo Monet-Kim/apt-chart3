@@ -249,6 +249,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
           setLevel(lv);
           setMapLevel(lv);
         }}
+        onCreate={(map) => { onIdle(map); }}
         onIdle={onIdle}
       >
         {loading && (

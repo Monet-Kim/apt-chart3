@@ -40,9 +40,20 @@ function App() {
   useEffect(() => { openPanelRef.current = openPanel; }, [openPanel]);
   useEffect(() => { isLeftPanelOpenRef.current = isLeftPanelOpen; }, [isLeftPanelOpen]);
 
+  // 게시판 내부 뒤로가기 핸들러 (detail→list, form→list)
+  const boardBackHandlerRef = useRef(null);
+
   useEffect(() => {
     history.pushState(null, '');
     const handlePopState = () => {
+      // 게시판이 열려 있으면 내부 뒤로가기 우선 처리
+      if (openPanelRef.current === 'board') {
+        boardBackHandlerRef.current?.();
+        // 내부에서 처리됐든 아니든 게시판은 닫지 않고 더미 상태 재적립
+        history.pushState(null, '');
+        return;
+      }
+
       const hadPanel = openPanelRef.current || isLeftPanelOpenRef.current;
       if (openPanelRef.current) {
         setOpenPanel(null);
@@ -97,7 +108,7 @@ function App() {
       {!isDesktop && isLeftPanelOpen && (
         <div
           onClick={() => setIsLeftPanelOpen(false)}
-          style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 9 }}
+          style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3 }}
           aria-hidden
         />
       )}
@@ -108,7 +119,7 @@ function App() {
         width: leftPanelWidth,
         transform: isLeftPanelOpen ? 'translateX(0)' : 'translateX(-100%)',
         transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
-        zIndex: 10,
+        zIndex: 4,
         boxShadow: isLeftPanelOpen ? '4px 0 24px rgba(0,0,0,0.12)' : 'none',
       }}>
         <LeftPanel
@@ -143,10 +154,10 @@ function App() {
               position: 'absolute', top: '50%', left: 0,
               transform: 'translateY(-50%)',
               zIndex: 7, width: 22, height: 56,
-              border: '1px solid #d6def2', borderLeft: 'none',
+              border: '1px solid #E6DED4', borderLeft: 'none',
               borderRadius: '0 8px 8px 0',
               background: '#fff', cursor: 'pointer',
-              fontSize: '0.75rem', color: '#6476FF', fontWeight: 900,
+              fontSize: '0.75rem', color: '#6B625B', fontWeight: 900,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: '2px 0 8px rgba(0,0,0,0.08)', padding: 0,
             }}
@@ -171,8 +182,8 @@ function App() {
                   onClick={() => togglePanel(btn.key)}
                   style={{
                     width: 56, height: 56, borderRadius: '50%',
-                    backgroundColor: active ? '#f0f4ff' : '#fff',
-                    border: active ? '2px solid #6476FF' : '1px solid #ccc',
+                    backgroundColor: active ? '#E6DED4' : '#fff',
+                    border: active ? '2px solid #6B625B' : '1px solid #C9BFB4',
                     fontSize: '1.4rem', cursor: 'pointer',
                     boxShadow: '0 2px 8px rgba(0,0,0,0.10)',
                   }}
@@ -201,12 +212,14 @@ function App() {
             position: 'absolute',
             bottom: isMobile ? 64 : 0,
             left: 0, right: 0,
-            height: isMobile ? 'calc(85vh - 64px)' : '88vh',
+            height: isMobile ? 'calc(100vh - 128px)' : 'calc(100vh - 16px)',
             borderRadius: '20px 20px 0 0',
             transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
             transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
             background: '#fff',
-            boxShadow: '0 -4px 24px rgba(0,0,0,0.12)',
+            boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
+            display: 'flex',
+            flexDirection: 'column',
             overflow: 'hidden',
             zIndex: 5,
           } : {
@@ -218,6 +231,8 @@ function App() {
             transition: 'transform 0.25s ease',
             background: '#fff',
             boxShadow: openPanel ? '0 0 24px rgba(0,0,0,0.10)' : 'none',
+            display: 'flex',
+            flexDirection: 'column',
             overflow: 'hidden',
             zIndex: 5,
             borderRadius: 14,
@@ -226,14 +241,19 @@ function App() {
         >
           {/* 바텀시트 핸들 (모바일·태블릿) */}
           {isBottomSheet && (
-            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10, paddingBottom: 4, flexShrink: 0 }}>
-              <div style={{ width: 36, height: 4, borderRadius: 99, background: '#d6def2' }} />
+            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'center', paddingTop: 10, paddingBottom: 2 }}>
+              <div style={{ width: 40, height: 4, borderRadius: 99, background: '#E6DED4' }} />
             </div>
           )}
 
-          {openPanel === 'login' && <Login onClose={closePanel} />}
-          {openPanel === 'board' && <BoardPanel onClose={closePanel} />}
-          <div style={{ display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column', height: isBottomSheet ? 'calc(100% - 18px)' : '100%' }}>
+          {/* 각 패널 — 동일한 flex:1 래퍼로 통일. 스크롤은 각 패널 내부에서 처리 */}
+          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
+            <Login onClose={closePanel} />
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
+            <BoardPanel onClose={closePanel} backHandlerRef={boardBackHandlerRef} />
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
             <ChartPanel
               isOpen={openPanel === 'chart'}
               favApts={favApts}
@@ -254,7 +274,7 @@ function App() {
           bottom: 0, left: 0, right: 0,
           height: 64,
           background: '#fff',
-          borderTop: '1.5px solid #e6ebf5',
+          borderTop: '1.5px solid #E6DED4',
           display: 'flex',
           alignItems: 'stretch',
           zIndex: 11,
@@ -267,7 +287,7 @@ function App() {
               flex: 1, border: 'none', background: 'none', cursor: 'pointer',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               gap: 3, fontSize: '0.65rem', fontWeight: 700,
-              color: isLeftPanelOpen ? '#6476FF' : '#6a7692',
+              color: isLeftPanelOpen ? '#6B625B' : '#C9BFB4',
             }}
           >
             <span style={{ fontSize: '1.3rem' }}>🏠</span>
@@ -284,8 +304,8 @@ function App() {
                   flex: 1, border: 'none', background: 'none', cursor: 'pointer',
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                   gap: 3, fontSize: '0.65rem', fontWeight: 700,
-                  color: active ? '#6476FF' : '#6a7692',
-                  borderTop: active ? '2px solid #6476FF' : '2px solid transparent',
+                  color: active ? '#6B625B' : '#C9BFB4',
+                  borderTop: active ? '2px solid #6B625B' : '2px solid transparent',
                 }}
                 aria-pressed={active}
               >

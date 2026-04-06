@@ -8,6 +8,27 @@ const R2_BASE = process.env.NODE_ENV === 'production'
 const workbookCache = new Map(); // code5 -> { wb, url }  (Rdata)
 const pdataCache   = new Map(); // code5 -> { wb, url }  (Pdata)
 const tradeCache   = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
+let code5MapCache  = null;
+
+async function loadCode5Map() {
+  if (code5MapCache) return code5MapCache;
+  try {
+    const r = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+    if (r.ok) code5MapCache = await r.json();
+  } catch { /* 로드 실패 시 null 유지 */ }
+  return code5MapCache;
+}
+
+// code5_map.json 파일명에서 시군구 부분 추출 (예: "경기도_화성시_동탄구_41597_list_coord.csv" → "화성시_동탄구")
+async function getAltS2(as1, code5) {
+  const map = await loadCode5Map();
+  if (!map?.[code5]) return null;
+  const fname = map[code5]; // e.g. "경기도_화성시_동탄구_41597_list_coord.csv"
+  const suffix = `_${code5}_list_coord.csv`;
+  const prefix = `${as1}_`;
+  if (!fname.startsWith(prefix) || !fname.endsWith(suffix)) return null;
+  return fname.slice(prefix.length, fname.length - suffix.length) || null;
+}
 
 const enc = (s) => encodeURIComponent(s);
 
@@ -102,8 +123,10 @@ async function fetchIndexedCsvs(folder, candidates) {
 export async function fetchWorkbook(as1, as2, code5) {
   if (workbookCache.has(code5)) return workbookCache.get(code5);
   const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
+  const altS2 = await getAltS2(S1, code5);
   const candidates = [
     `Rdata_${S1}_${S2}_${code5}_index.json`,
+    ...(altS2 && altS2 !== S2 ? [`Rdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Rdata_${S1}_${code5}_index.json`,
     `Rdata_${S1}_${S2}_${S2}_${code5}_index.json`,
     `Rdata_${code5}_index.json`,
@@ -117,8 +140,10 @@ export async function fetchWorkbook(as1, as2, code5) {
 export async function fetchPdata(as1, as2, code5) {
   if (pdataCache.has(code5)) return pdataCache.get(code5);
   const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
+  const altS2 = await getAltS2(S1, code5);
   const candidates = [
     `Pdata_${S1}_${S2}_${code5}_index.json`,
+    ...(altS2 && altS2 !== S2 ? [`Pdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Pdata_${S1}_${code5}_index.json`,
     `Pdata_${S1}_${S2}_${S2}_${code5}_index.json`,
     `Pdata_${code5}_index.json`,
@@ -133,13 +158,15 @@ export async function fetchPdata(as1, as2, code5) {
 // (다필지 단지, 신규단지 분양권 거래만 존재하는 대형 평형 누락 방지)
 export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
   const set = new Set();
-  const pnuStr = String(pnu);
+  const pnuStr = pnu ? String(pnu) : null;
 
   // Rdata PNU 매칭
-  for (const obj of (wb || [])) {
-    if (String(obj.pnu).trim() !== pnuStr) continue;
-    const ar = toNum(obj.excluUseAr);
-    if (Number.isFinite(ar)) set.add(floor1(ar));
+  if (pnuStr) {
+    for (const obj of (wb || [])) {
+      if (String(obj.pnu).trim() !== pnuStr) continue;
+      const ar = toNum(obj.excluUseAr);
+      if (Number.isFinite(ar)) set.add(floor1(ar));
+    }
   }
 
   // Rdata aptNm 매칭
@@ -211,11 +238,11 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   const rPtsX = [], rPtsY = [];
 
   // PNU 매칭 + aptNm 매칭 union (다필지 단지 대응)
-  const pnuStr = String(pnu);
+  const pnuStr = pnu ? String(pnu) : null;
   const rNormName = kaptName ? normAptNm(kaptName) : null;
 
   const rMatches = (obj) => {
-    if (String(obj.pnu).trim() === pnuStr) return true;
+    if (pnuStr && String(obj.pnu).trim() === pnuStr) return true;
     if (rNormName && normAptNm(obj.aptNm) === rNormName) return true;
     return false;
   };

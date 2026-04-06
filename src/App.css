@@ -43,10 +43,10 @@
   z-index: 100 !important;
 }
 
-/* 전역 스크롤바 — 파란색 계열 */
+/* 전역 스크롤바 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #a0aeff #f0f2ff;
+  scrollbar-color: #C9BFB4 #F7F3EE;
 }
 
 *::-webkit-scrollbar {
@@ -55,15 +55,15 @@
 }
 
 *::-webkit-scrollbar-track {
-  background: #f0f2ff;
+  background: #F7F3EE;
   border-radius: 99px;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #a0aeff;
+  background: #C9BFB4;
   border-radius: 99px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #6476FF;
+  background: #6B625B;
 }
