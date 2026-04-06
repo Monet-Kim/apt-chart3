@@ -216,6 +216,7 @@ function App() {
             borderRadius: '20px 20px 0 0',
             transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
             transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
+            pointerEvents: openPanel ? 'auto' : 'none',
             background: '#fff',
             boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
             display: 'flex',
