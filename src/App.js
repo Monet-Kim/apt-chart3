@@ -283,7 +283,7 @@ function App() {
         }}>
           {/* 패널 열기 버튼 */}
           <button
-            onClick={() => setIsLeftPanelOpen(p => !p)}
+            onClick={() => { setOpenPanel(null); setIsLeftPanelOpen(p => !p); }}
             style={{
               flex: 1, border: 'none', background: 'none', cursor: 'pointer',
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
