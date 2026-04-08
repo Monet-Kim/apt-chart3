@@ -125,6 +125,7 @@ function App() {
         <LeftPanel
           selectedApt={selectedApt}
           onPanTo={(lat, lng) => setMapCenter({ lat, lng })}
+          onSelectApt={handleSelectApt}
           favApts={favApts}
           addFavoriteApt={addFavoriteApt}
           removeFavoriteApt={removeFavoriteApt}

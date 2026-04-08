@@ -1,6 +1,7 @@
 // src/pages/LeftPanel.js
-import React, { useEffect, useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
+import FinanceChart from './FinanceChart';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
@@ -8,6 +9,19 @@ import {
   buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
 } from './services/aptData';
+
+/* 면적 탭 스크롤바 스타일 (webkit) */
+const areaScrollbarStyle = `
+.area-tab-scroll::-webkit-scrollbar { height: 3px; }
+.area-tab-scroll::-webkit-scrollbar-track { background: transparent; }
+.area-tab-scroll::-webkit-scrollbar-thumb { background: #D3D1C7; border-radius: 2px; }
+.area-tab-scroll::-webkit-scrollbar-thumb:hover { background: #B4B2A9; }
+`;
+if (typeof document !== 'undefined') {
+  let s = document.getElementById('area-scroll-style');
+  if (!s) { s = document.createElement('style'); s.id = 'area-scroll-style'; document.head.appendChild(s); }
+  s.textContent = areaScrollbarStyle;
+}
 
 /* Hot 레이블 흔들림 애니메이션 */
 const hotKeyframes = `
@@ -25,7 +39,271 @@ if (typeof document !== 'undefined') {
   s.textContent = hotKeyframes;
 }
 
-function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavoriteApt, onClose, onOpenChartPanel, isMobile = false, isTablet = false }) {
+// ────────────────────────────────────────────
+// 공통 차트 옵션 (FinanceChart와 동일한 스타일)
+// ────────────────────────────────────────────
+function makeChartOptions(height) {
+  return {
+    height,
+    watermark: { visible: false },
+    layout: {
+      background: { color: '#ffffff' },
+      textColor: '#6B625B',
+      fontSize: 11,
+      fontFamily: 'Pretendard, -apple-system, sans-serif',
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: 'rgba(0,0,0,0.12)' },
+      horzLines: { color: 'rgba(0,0,0,0.08)' },
+    },
+    crosshair: {
+      mode: 1,
+      vertLine: { color: '#6B625B', width: 1, style: 0, labelBackgroundColor: '#6B625B' },
+      horzLine: { color: '#6B625B', width: 1, style: 0, labelBackgroundColor: '#6B625B' },
+    },
+    timeScale: {
+      borderColor: '#E6DED4',
+      timeVisible: true,
+      secondsVisible: false,
+      minBarSpacing: 0.1,
+      tickMarkFormatter: (time) => {
+        const d = typeof time === 'object'
+          ? new Date(time.year, time.month - 1, time.day)
+          : new Date(time);
+        return String(d.getFullYear());
+      },
+    },
+    localization: {
+      timeFormatter: (time) => {
+        const d = typeof time === 'object'
+          ? new Date(time.year, time.month - 1, time.day)
+          : new Date(time);
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+      },
+    },
+    rightPriceScale: { borderColor: '#E6DED4' },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true },
+    handleScale: { mouseWheel: true, pinch: true },
+  };
+}
+
+// ────────────────────────────────────────────
+// 아파트 거래 차트 컴포넌트
+// ────────────────────────────────────────────
+function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile }) {
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const volSeriesRef = useRef(null);
+  const avgSeriesRef = useRef(null);
+  const svgRef       = useRef(null);
+
+  const chartHeight = isMobile ? 200 : 240;
+
+  // x: ["2020-01", ...] → "YYYY-MM-01" 형태로 변환
+  function toTime(ym) {
+    return ym.length === 7 ? `${ym}-01` : ym;
+  }
+
+  // 항상 최신 props를 참조하도록 ref로 관리
+  const redrawDotsRef = useRef(null);
+  redrawDotsRef.current = () => {
+    const svg = svgRef.current;
+    const chart = chartRef.current;
+    if (!svg || !chart) return;
+
+    // 데이터 없으면 SVG만 비우고 조기 종료
+    if (!ptsX?.length && !pPtsX?.length) {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      return;
+    }
+
+    const visibleRange = chart.timeScale().getVisibleRange();
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    svg.setAttribute('width', rect.width);
+    svg.setAttribute('height', chartHeight);
+
+    const drawDots = (xs, ys, shape) => {
+      xs.forEach((xVal, i) => {
+        const timeStr = toTime(xVal);
+        if (visibleRange && (timeStr < visibleRange.from || timeStr > visibleRange.to)) return;
+
+        const xCoord = chart.timeScale().timeToCoordinate(timeStr);
+        const yCoord = avgSeriesRef.current
+          ? avgSeriesRef.current.priceToCoordinate(ys[i])
+          : null;
+        if (xCoord == null || yCoord == null) return;
+
+        if (shape === 'circle') {
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', xCoord);
+          circle.setAttribute('cy', yCoord);
+          circle.setAttribute('r', 3);
+          circle.setAttribute('fill', 'rgba(196, 154, 42, 0.40)');
+          circle.setAttribute('stroke', 'none');
+          circle.setAttribute('stroke-width', '0');
+          svg.appendChild(circle);
+        } else if (shape === 'triangle') {
+          const size = 4;
+          const cx = xCoord, cy = yCoord;
+          const points = `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`;
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          poly.setAttribute('points', points);
+          poly.setAttribute('fill', 'rgba(196, 154, 42, 0.50)');
+          poly.setAttribute('stroke', 'none');
+          poly.setAttribute('stroke-width', '0');
+          svg.appendChild(poly);
+        }
+      });
+    };
+
+    drawDots(ptsX, ptsY, 'circle');
+    if (pPtsX?.length) drawDots(pPtsX, pPtsY, 'triangle');
+  };
+
+  // 차트 초기화
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      ...makeChartOptions(chartHeight),
+      leftPriceScale: { visible: false },
+      rightPriceScale: {
+        visible: true,
+        borderColor: '#E6DED4',
+        scaleMargins: { top: 0.08, bottom: 0.08 },
+      },
+    });
+    chartRef.current = chart;
+
+    // 거래량 히스토그램 (왼쪽 overlay, 별도 price scale)
+    const volSeries = chart.addSeries(HistogramSeries, {
+      color: 'rgba(196, 154, 42, 0.35)',
+      priceScaleId: 'vol',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0 }, // 하단 25%만 사용
+    });
+    volSeriesRef.current = volSeries;
+
+    // 평균가 라인
+    const avgSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(196, 154, 42, 0.7)',
+      lineWidth: 2,
+      priceScaleId: 'right',
+      lastValueVisible: true,
+      priceLineVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      priceFormat: {
+        type: 'custom',
+        formatter: (v) => `${v.toFixed(1)}억`,
+        minMove: 0.01,
+      },
+    });
+    avgSeriesRef.current = avgSeries;
+
+    // X/Y축 변경 모두 대응 — RAF 루프 (항상 최신 ref 호출)
+    let rafId;
+    const loop = () => {
+      redrawDotsRef.current?.();
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+
+    // ResizeObserver
+    const ro = new ResizeObserver(() => {
+      chart.applyOptions({ width: containerRef.current?.clientWidth });
+      redrawDotsRef.current?.();
+    });
+    ro.observe(containerRef.current);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      volSeriesRef.current = null;
+      avgSeriesRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 데이터 변경 시 시리즈 업데이트
+  useEffect(() => {
+    if (!chartRef.current || !x.length) return;
+
+    // 거래량 데이터
+    const volData = x.map((ym, i) => ({
+      time: toTime(ym),
+      value: vol[i] || 0,
+      color: 'rgba(196, 154, 42, 0.35)',
+    })).sort((a, b) => a.time > b.time ? 1 : -1);
+    volSeriesRef.current?.setData(volData);
+
+    // 평균가 데이터 (0 제외)
+    const avgData = x.map((ym, i) => ({
+      time: toTime(ym),
+      value: avg[i] || null,
+    })).filter(d => d.value).sort((a, b) => a.time > b.time ? 1 : -1);
+    avgSeriesRef.current?.setData(avgData);
+
+    // X축 범위 설정
+    requestAnimationFrame(() => {
+      if (!chartRef.current) return;
+      const today = new Date().toISOString().slice(0, 10);
+      const start = new Date();
+      start.setFullYear(start.getFullYear() - yearWindow);
+      const startStr = start.toISOString().slice(0, 10);
+      try {
+        chartRef.current.timeScale().setVisibleRange({ from: startStr, to: today });
+      } catch {
+        chartRef.current.timeScale().fitContent();
+      }
+      redrawDotsRef.current?.();
+    });
+  }, [x, vol, avg, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // yearWindow 변경 시 X축 범위 업데이트
+  useEffect(() => {
+    if (!chartRef.current || !x.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const start = new Date();
+    start.setFullYear(start.getFullYear() - yearWindow);
+    const startStr = start.toISOString().slice(0, 10);
+    try {
+      chartRef.current.timeScale().setVisibleRange({ from: startStr, to: today });
+    } catch {
+      chartRef.current.timeScale().fitContent();
+    }
+    requestAnimationFrame(() => redrawDotsRef.current?.());
+  }, [yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: chartHeight }}>
+      <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
+      {/* SVG overlay — dot 렌더링 */}
+      <svg
+        ref={svgRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────
+// 메인 컴포넌트
+// ────────────────────────────────────────────
+function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onClose, onOpenChartPanel, isMobile = false, isTablet = false }) {
   const aptKey = selectedApt
     ? `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`
     : null;
@@ -42,6 +320,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   // 선택 아파트 관련 상태
   const [pnu, setPnu] = useState(null);
   const [pnuErr, setPnuErr] = useState(null);
+  const [showInfo, setShowInfo] = useState(false);
   const [areas, setAreas] = useState([]);
   const [selArea, setSelArea] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
@@ -54,60 +333,32 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const [avg, setAvg] = useState([]);
   const [ptsX, setPtsX] = useState([]);
   const [ptsY, setPtsY] = useState([]);
-  const [pPtsX, setPPtsX] = useState([]); // Pdata 산점
+  const [pPtsX, setPPtsX] = useState([]);
   const [pPtsY, setPPtsY] = useState([]);
 
-  // workbook refs (handleAreaClick 재사용을 위해 보관)
-  const pdWbRef = React.useRef(null);
-  const wbRef   = React.useRef(null);
-  // 프로그래밍 방식 xRange 변경 시 onRelayout 피드백 루프 차단
-  const skipRelayoutRef = React.useRef(false);
+  // workbook refs
+  const pdWbRef = useRef(null);
+  const wbRef   = useRef(null);
 
-  // Hot 면적 (최근 1년 거래량 순위 1·2위)
-  const [hotAreas, setHotAreas] = useState([]); // [1위면적, 2위면적]
+  // Hot 면적
+  const [hotAreas, setHotAreas] = useState([]);
 
   // 스무딩 윈도우
   const [smoothWindow, setSmoothWindow] = useState(3);
 
-  // X/Y축 범위
-  const [xRange, setXRange] = useState(null);
+  // X축 기간
   const [yearWindow, setYearWindow] = useState(5);
-  const [yRange, setYRange] = useState(null);
-
-  const janLines = useMemo(() => {
-    if (!x.length) return [];
-    return Array.from(new Set(x.map(ym => ym.slice(0, 4)))).map(y => ({
-      type: 'line', xref: 'x', yref: 'paper',
-      x0: `${y}-01-01`, x1: `${y}-01-01`, y0: 0, y1: 1,
-      line: { width: 1, color: 'rgba(0,0,0,0.10)' },
-    }));
-  }, [x]);
-
-  // X축 범위: 현재 달 기준 최근 N년
-  useEffect(() => {
-    if (!x.length) return;
-    const earliestDate = ymToDate(x[0]);
-    const today = new Date();
-    const anchor = new Date(today.getFullYear(), today.getMonth(), 1);
-    const start = new Date(anchor.getFullYear() - yearWindow, anchor.getMonth(), 1);
-    skipRelayoutRef.current = true; // Plotly 피드백 루프 차단
-    setXRange([dateToISOYM(start < earliestDate ? earliestDate : start), dateToISOYM(anchor)]);
-  }, [x, yearWindow]);
-
-  // Y축 초기 범위
-  useEffect(() => {
-    if (!x.length) return;
-    const maxVol = Math.max(...vol, 0);
-    setYRange([0, maxVol > 0 ? maxVol * 4 : 10]);
-  }, [x, vol]);
 
   // Kakao Places 준비
-  const placesRef = React.useRef(null);
+  const placesRef = useRef(null);
   useEffect(() => {
     if (window.kakao?.maps?.services && !placesRef.current) {
       placesRef.current = new window.kakao.maps.services.Places();
     }
   }, []);
+
+  const [showSearch, setShowSearch] = useState(false);
+  const searchInputRef = useRef(null);
 
   // 검색
   const handleSearch = (e) => {
@@ -120,13 +371,69 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     });
   };
 
-  const handleSuggestionClick = (item) => {
+  const handleSuggestionClick = async (item) => {
     const lat = parseFloat(item.y), lng = parseFloat(item.x);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) onPanTo?.(lat, lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    // 1) 지도 이동
+    onPanTo?.(lat, lng);
     setSuggestions([]);
+    setShowSearch(false);
+    setSearchInput('');
+
+    // 2) 카카오 역지오코딩으로 code5 추출 → CSV 로드 → 좌표 매칭
+    try {
+      const geocoder = new window.kakao.maps.services.Geocoder();
+      geocoder.coord2RegionCode(lng, lat, async (res, status) => {
+        if (status !== window.kakao.maps.services.Status.OK || !res?.length) return;
+        const b = res.find(r => r.region_type === 'B') || res[0];
+        const code5 = (b.code || '').slice(0, 5);
+        const s1 = b.region_1depth_name || '';
+        const s2 = b.region_2depth_name || '';
+        if (!code5 || !s1 || !s2) return;
+
+        const R2_BASE = process.env.NODE_ENV === 'production'
+          ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
+          : '';
+
+        // code5_map.json으로 정확한 파일명 조회
+        let fileName = `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`;
+        try {
+          const mapRes = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+          if (mapRes.ok) {
+            const mapJson = await mapRes.json();
+            if (mapJson?.[code5]) fileName = `${R2_BASE}/KaptList/${mapJson[code5]}`;
+          }
+        } catch { /* 폴백 파일명 사용 */ }
+
+        const csvRes = await fetch(fileName, { cache: 'no-store' });
+        if (!csvRes.ok) return;
+        const { parseCSV } = await import('../utils/csvUtils');
+        const rows = parseCSV(await csvRes.text()).map(row => ({
+          ...row,
+          위도: parseFloat(row['위도']),
+          경도: parseFloat(row['경도']),
+        }));
+
+        // 검색 좌표와 가장 가까운 아파트 찾기 (300m 이내)
+        let best = null, bestDist = Infinity;
+        for (const row of rows) {
+          if (!Number.isFinite(row['위도']) || !Number.isFinite(row['경도'])) continue;
+          const dLat = row['위도'] - lat;
+          const dLng = row['경도'] - lng;
+          const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+          if (dist < bestDist) { bestDist = dist; best = row; }
+        }
+
+        // 약 300m 이내 (위경도 0.003 ≈ 300m)
+        if (best && bestDist < 0.003) {
+          onSelectApt?.(best);
+        }
+      });
+    } catch { /* 매칭 실패 시 지도 이동만 */ }
   };
 
-  // 선택 아파트 변경 시: pnu → 면적 → 차트
+  // 선택 아파트 변경 시
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -148,7 +455,6 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       const as1 = selectedApt['as1'] || '', as2 = selectedApt['as2'] || '';
       setLoadingInfo(true);
       try {
-        // Rdata + Pdata 병렬 로드 (Pdata 없어도 계속 진행)
         const [rResult, pResult] = await Promise.allSettled([
           fetchWorkbook(as1, as2, code5),
           fetchPdata(as1, as2, code5),
@@ -167,7 +473,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const repAreas = groupAreasToRep(rawList);
         setAreas(repAreas);
 
-        // ── 최근 1년 면적별 거래량 집계 → Hot 순위 (Rdata + Pdata 통합)
+        // Hot 면적 집계
         {
           const cutoff = (() => {
             const d = new Date();
@@ -176,9 +482,8 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
           })();
           const pnuStr = _pnu ? String(_pnu) : null;
           const normName = selectedApt['kaptName'] ? normAptNm(selectedApt['kaptName']) : null;
-          const volMap = new Map(); // areaNorm -> count
+          const volMap = new Map();
 
-          // Rdata 집계
           for (const obj of (wb || [])) {
             const match =
               (pnuStr && String(obj.pnu).trim() === pnuStr) ||
@@ -194,7 +499,6 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
             volMap.set(rep, (volMap.get(rep) || 0) + 1);
           }
 
-          // Pdata 집계 (취소 거래 제외)
           for (const obj of (_pdWb || [])) {
             if (parseFloat(obj.isCanceled) === 1) continue;
             if (normName && normAptNm(obj.aptNm) !== normName) continue;
@@ -237,7 +541,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     return () => { cancelled = true; };
   }, [selectedApt]);
 
-  // smoothWindow 변경 시 현재 면적으로 재집계
+  // smoothWindow 변경 시 재집계
   useEffect(() => {
     if (!selectedApt || selArea === null) return;
     let cancelled = false;
@@ -293,13 +597,6 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     setYearWindow(prev => Math.max(1, prev + delta));
   };
 
-  const handleRelayout = (e) => {
-    if (skipRelayoutRef.current) { skipRelayoutRef.current = false; return; }
-    if (e['xaxis.range[0]'] && e['xaxis.range[1]']) {
-      setXRange([e['xaxis.range[0]'], e['xaxis.range[1]']]);
-    }
-  };
-
   const infoPairs = useMemo(() => {
     if (!selectedApt) return [];
     const pick = (k) => {
@@ -331,240 +628,348 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         height: '100%',
       }}
     >
-      {/* 닫기 버튼 — 항상 우상단 고정, 44px 터치 타겟 */}
-      <button
-        onClick={onClose}
-        style={{
-          position: 'absolute', top: 8, right: 8,
-          width: 44, height: 44, border: 'none', background: 'none',
-          cursor: 'pointer', fontSize: '1.2rem', color: '#6B625B',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderRadius: 8, zIndex: 2,
-        }}
-        title="닫기"
-      >✕</button>
+      {/* ── 상단 헤더: 아파트명 + 아이콘 버튼들 ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', minHeight: 36, borderBottom: '1px solid #E6DED4' }}>
 
-      {/* 검색창 — 닫기 버튼 공간(44px을 30으로 줄임) 확보를 위해 오른쪽 패딩 */}
-      <form onSubmit={handleSearch} style={{ marginTop: 4, marginBottom: 4, display: 'flex', gap: 8, alignItems: 'center', position: 'relative', paddingRight: 40 }}>
-        <input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="아파트, 주소, 역, 학교 검색"
-          style={{ flex: 1, height: 30, padding: '0 14px', border: '1.5px solid #E6DED4', borderRadius: 10, fontSize: '1rem', outline: 'none', boxSizing: 'border-box' }}
-          autoComplete="off"
-        />
-        <button
-          type="submit"
-          style={{ height: 30, background: '#6B625B', color: '#fff', fontWeight: 700, border: 'none', borderRadius: 10, padding: '0 18px', fontSize: '1rem', cursor: 'pointer', flexShrink: 0 }}
-        >
-          검색
-        </button>
-        {suggestions.length > 0 && (
-          <ul style={{ position: 'absolute', top: '110%', left: 0, right: 40, background: '#fff', border: '1px solid #dbe5f5', borderRadius: 10, boxShadow: '0 4px 16px 0 #dbe5f533', zIndex: 99, listStyle: 'none', margin: 0, padding: 0 }}>
-            {suggestions.map((item) => (
-              <li key={item.id} onClick={() => handleSuggestionClick(item)} style={{ padding: '14px 14px', cursor: 'pointer', fontSize: '0.97rem', borderBottom: '1px solid #E6DED4' }}>
-                {item.place_name} <span style={{ color: '#C9BFB4', fontSize: '0.88rem' }}>({item.address_name})</span>
-              </li>
-            ))}
-          </ul>
+        {/* 아파트명 or placeholder */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedApt ? (
+            <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#1F1D1B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {trimAptName(selectedApt.kaptName)}
+            </div>
+          ) : (
+            <div style={{ fontSize: '1rem', color: '#C9BFB4', fontWeight: 500 }}>아파트를 선택하세요</div>
+          )}
+        </div>
+
+        {/* 즐겨찾기 별 — 아파트 선택 시만 */}
+        {selectedApt && (
+          <button
+            onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+            title={isFav ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+          >
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+              <polygon
+                points="8,2 9.8,6.5 14.5,6.5 10.8,9.5 12.2,14 8,11 3.8,14 5.2,9.5 1.5,6.5 6.2,6.5"
+                fill={isFav ? '#f5c518' : 'none'}
+                stroke={isFav ? '#f5c518' : '#aaa'}
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
         )}
-      </form>
 
-      {!selectedApt && <div style={{ flex: 1, background: '#fff' }} />}
-
-      {selectedApt && (
-        <>
-          {/* 아파트명 + 즐겨찾기 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: '1.45rem', fontWeight: 800 }}>{trimAptName(selectedApt.kaptName)}</div>
+        {/* 추가정보 버튼 — 아파트 선택 시만 */}
+        {selectedApt && (
+          <div style={{ position: 'relative', flexShrink: 0 }}>
             <button
-              onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
-              style={{ border: 'none', background: 'none', cursor: 'pointer', flexShrink: 0, padding: '4px 6px', position: 'relative', overflow: 'visible' }}
-              title="단지 즐겨찾기"
+              onClick={() => setShowInfo(p => !p)}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+              title="추가정보"
             >
-              <span style={{ fontSize: '1.35rem', color: isFav ? '#f5c518' : '#C9BFB4', lineHeight: 1, display: 'block' }}>{isFav ? '★' : '☆'}</span>
-              <span style={{
-                position: 'absolute',
-                top: 3,
-                right: -55,
-                color: '#c0392b',
-                fontSize: '0.9rem',
-                fontWeight: 1000,
-                whiteSpace: 'nowrap',
-                pointerEvents: 'none',
-                transformOrigin: 'center center',
-                transform: 'rotate(-12deg)',
-                lineHeight: 1,
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <circle cx="9" cy="9" r="7.5" stroke="#aaa" strokeWidth="1.3"/>
+                <line x1="9" y1="8" x2="9" y2="13" stroke="#aaa" strokeWidth="1.4" strokeLinecap="round"/>
+                <circle cx="9" cy="5.5" r="0.9" fill="#aaa"/>
+              </svg>
+            </button>
+            {showInfo && (
+              <div style={{
+                position: 'absolute', top: '110%', right: 0, zIndex: 100,
+                background: '#fff', border: '1px solid #E6DED4', borderRadius: 12,
+                boxShadow: '0 6px 24px rgba(0,0,0,0.12)',
+                padding: '12px 14px', minWidth: 220,
               }}>
-                {isFav ? '추가완료' : '관심추가'}
-              </span>
-            </button>
-          </div>
-
-          {/* 기본정보 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: '0.88rem', lineHeight: 1.4, color: '#1F1D1B', padding: '6px 10px', borderRadius: 10 }}>
-            {infoPairs.map(([k, v]) => (
-              <span key={k} style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ color: '#6B625B', fontWeight: 800 }}>{k}</span>
-                <span style={{ color: '#1F1D1B', fontWeight: 700 }}>
-                  {k === '세대' ? String(v).replace(/\.0+$/, '') : v}
-                </span>
-              </span>
-            ))}
-            <button style={{ marginLeft: 'auto', flexShrink: 0, height: 26, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 8, background: '#F7F3EE', color: '#6B625B', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' }}>
-              추가정보
-            </button>
-          </div>
-          {pnuErr && <div style={{ color: '#c33', marginTop: 6, fontSize: '0.92rem' }}>{pnuErr}</div>}
-
-          {/* 전용면적 선택 */}
-          <div style={{ marginTop: 8, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center', fontWeight: 900, fontSize: '1.05rem', color: '#1F1D1B', marginBottom: 4 }}>
-              <span>전용면적 선택</span>
-              {areaRangeText && <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#6B625B' }}>{areaRangeText}</span>}
-            </div>
-            <div
-              ref={areaScrollRef}
-              onMouseDown={onAreaMouseDown}
-              onMouseMove={onAreaMouseMove}
-              onMouseUp={endAreaDrag}
-              onMouseLeave={endAreaDrag}
-              onTouchStart={onAreaTouchStart}
-              onTouchMove={onAreaTouchMove}
-              onTouchEnd={endAreaTouchDrag}
-              style={{ display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'visible', padding: '14px 4px 6px', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin', cursor: dragRef.current?.down ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'pan-x', borderRadius: 10 }}
-            >
-              {areas.map((a) => {
-                const active   = selArea === a;
-                const hotRank  = hotAreas.indexOf(a); // 0=1위, 1=2위, -1=없음
-                const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
-                const hotColor = hotRank === 0 ? '#c0392b' : '#b35a00';
-                return (
-                  <button
-                    key={a}
-                    onClick={() => handleAreaClick(a)}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onTouchStart={(e) => e.stopPropagation()}
-                    style={{
-                      flex: '0 0 auto',
-                      minWidth: isMobile ? 45 : 55,
-                      height: isMobile ? 28 : 30,
-                      padding: isMobile ? '0 6px' : '0 8px',
-                      borderRadius: 10,
-                      fontWeight: 900,
-                      fontSize: isMobile ? '0.75rem' : '0.88rem',
-                      cursor: 'pointer',
-                      border: active ? '2px solid #6B625B' : '1px solid #E6DED4',
-                      background: active ? '#6B625B' : '#F7F3EE',
-                      color: active ? '#fff' : '#1F1D1B',
-                      boxShadow: active ? '0 6px 16px rgba(107,98,91,0.22)' : 'none',
-                      transition: 'transform 0.08s ease',
-                      position: 'relative',
-                      overflow: 'visible',
-                      boxSizing: 'content-box',
-                    }}
-                  >
-                    {a.toFixed(1)}㎡
-                    {hotLabel && (
-                      <span style={{
-                        position: 'absolute',
-                        top: -5,
-                        right: 30,
-                        color: hotColor,
-                        fontSize: '0.7rem',
-                        fontWeight: 900,
-                        whiteSpace: 'nowrap',
-                        pointerEvents: 'none',
-                        transformOrigin: 'center center',
-                        transform: 'rotate(-12deg)',
-                        lineHeight: 1,
-                      }}>
-                        {hotLabel}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ marginTop: 6, fontSize: '0.85rem', color: '#6B625B' }}>좌우로 스와이프(드래그)해서 면적을 선택해.</div>
-          </div>
-
-          {/* 그래프 */}
-          <div style={{ width: '100%', height: isMobile ? 448 : isTablet ? 300 : 500, minHeight: isMobile ? 448 : 300, flexShrink: 0, background: '#fff', borderRadius: 8, marginTop: 4, display: 'flex', flexDirection: 'column' }}>
-            {(loadingTrade || loadingInfo) && <div style={{ padding: 12, color: '#6B625B' }}>로딩 중…</div>}
-            {tradeErr && <div style={{ padding: 12, color: '#c33' }}>{tradeErr}</div>}
-
-            {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
-              <>
-                {/* 컨트롤: X축 기간 조정 */}
-                <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px 4px', fontSize: '0.78rem', color: '#6B625B' }}>
-                  <span style={{ minWidth: 76, fontWeight: 700, color: '#1F1D1B' }}>X축 기간 조정</span>
-                  <button onClick={() => changeYearWindow(-1)} style={{ height: 36, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer' }}>– 1년</button>
-                  <span style={{ minWidth: 44, textAlign: 'center' }}>최근 {yearWindow}년</span>
-                  <button onClick={() => changeYearWindow(+1)} style={{ height: 36, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer' }}>+ 1년</button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#6B625B' }}>추가정보</span>
+                  <span onClick={() => setShowInfo(false)} style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#C9BFB4', fontWeight: 700 }}>✕</span>
                 </div>
-
-                <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-                  <div style={{ position: 'absolute', top: 4, left: 10, zIndex: 6, display: 'flex', gap: 12, alignItems: 'center', fontSize: '0.80rem', fontWeight: 800, color: '#1F1D1B', pointerEvents: 'none', background: 'rgba(247,243,238,0.85)', padding: '2px 6px', borderRadius: 6 }}>
-                    <span style={{ color: '#1f77b4' }}>■ 거래량</span>
-                    <span style={{ color: '#ff7f0e' }}>━ 평균가</span>
-                    <span style={{ color: '#ff7f0e' }}>● 실거래</span>
-                    {pPtsX.length > 0 && <span style={{ color: '#ff7f0e' }}>▲ 입주권</span>}
+                {infoPairs.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {infoPairs.map(([k, v]) => (
+                      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem' }}>
+                        <span style={{ color: '#6B625B', fontWeight: 800 }}>{k}</span>
+                        <span style={{ fontWeight: 700, color: '#1F1D1B' }}>{k === '세대' ? String(v).replace(/\.0+$/, '') : v}</span>
+                      </div>
+                    ))}
                   </div>
-
-                  <Plot
-                    data={[
-                      { type: 'bar', x, y: vol, name: '거래량', marker: { opacity: 0.4, color: '#1f77b4' }, yaxis: 'y1', hovertemplate: '거래량 %{y}건<extra></extra>' },
-                      { type: 'scatter', mode: 'lines', x, y: avg, name: '평균가', yaxis: 'y2', line: { width: 2, color: '#ff7f0e' }, hovertemplate: '평균가 %{y:.2f}억<extra></extra>' },
-                      { type: 'scatter', mode: 'markers', x: ptsX, y: ptsY, name: '실거래', yaxis: 'y2', opacity: 0.6, marker: { size: 5, color: '#ff7f0e', symbol: 'circle' }, hovertemplate: '실거래 %{y:.2f}억<extra></extra>' },
-                      ...(pPtsX.length > 0 ? [{
-                        type: 'scatter', mode: 'markers',
-                        x: pPtsX, y: pPtsY, name: '입주권', yaxis: 'y2',
-                        opacity: 0.6, marker: { size: 6, color: '#ff7f0e', symbol: 'triangle-up' },
-                        hovertemplate: '입주권 %{y:.2f}억<extra></extra>',
-                      }] : []),
-                    ]}
-                    layout={{
-                      shapes: janLines,
-                      margin: { t: 24, b: 70, l: 5, r: 70 },
-                      dragmode: 'pan',
-                      showlegend: false,
-                      hovermode: 'x unified',
-                      hoverlabel: { bgcolor: '#1F1D1B', bordercolor: '#6B625B', font: { color: '#fff', size: 12 }, namelength: -1 },
-                      xaxis: { type: 'date', tickformat: '%Y.%m', hoverformat: '%Y년 %m월', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: '#6B625B', spikedash: 'solid', spikethickness: 1 },
-                      yaxis: { ticksuffix: '건', tickfont: { size: 9 }, showgrid: false, rangemode: 'tozero', autorange: false, range: yRange || undefined, showticklabels: false, fixedrange: true, showspikes: false },
-                      yaxis2: { overlaying: 'y', side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: true, fixedrange: true, showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikecolor: 'rgba(150,150,150,0.5)', spikedash: 'dot', spikethickness: 1 },
-                    }}
-                    useResizeHandler
-                    style={{ width: '100%', height: '100%' }}
-                    config={{ responsive: true, scrollZoom: true, displayModeBar: false }}
-                    onRelayout={handleRelayout}
-                  />
-                </div>
-
-              </>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: '#C9BFB4', textAlign: 'center' }}>정보 없음</div>
+                )}
+              </div>
             )}
           </div>
-        </>
-      )}
+        )}
 
-      {/* 즐겨찾기 단지 칩 — 항상 패널 하단에 표시 */}
-      {favApts.length > 0 && (
-        <div style={{ marginTop: 10, padding: '6px 4px' }}>
+        {/* 검색 아이콘 */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              setShowSearch(v => {
+                const next = !v;
+                if (next) setTimeout(() => searchInputRef.current?.focus(), 50);
+                else { setSearchInput(''); setSuggestions([]); }
+                return next;
+              });
+            }}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+            title="검색"
+          >
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+              <circle cx="7" cy="7" r="4.5" stroke="#aaa" strokeWidth="1.3"/>
+              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+          </button>
+          {showSearch && (
+            <>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSuggestions([]); } }}
+                placeholder="아파트, 주소, 역, 학교 검색"
+                style={{
+                  position: 'absolute', top: '110%', right: 0, zIndex: 99,
+                  width: 220, height: 34, padding: '0 12px',
+                  border: '1.5px solid #E6DED4', borderRadius: 10,
+                  fontSize: '0.9rem', outline: 'none', background: '#fff',
+                }}
+                autoComplete="off"
+              />
+              {suggestions.length > 0 && (
+                <ul style={{ position: 'absolute', top: 'calc(110% + 38px)', right: 0, width: 240, background: '#fff', border: '1px solid #dbe5f5', borderRadius: 10, boxShadow: '0 4px 16px 0 #dbe5f533', zIndex: 99, listStyle: 'none', margin: 0, padding: 0 }}>
+                  {suggestions.map((item) => (
+                    <li key={item.id} onClick={() => { handleSuggestionClick(item); setShowSearch(false); setSearchInput(''); }} style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.9rem', borderBottom: '1px solid #E6DED4' }}>
+                      {item.place_name} <span style={{ color: '#C9BFB4', fontSize: '0.82rem' }}>({item.address_name})</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 닫기 아이콘 */}
+        <button
+          onClick={onClose}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+          title="닫기"
+        >
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+            <line x1="3" y1="3" x2="13" y2="13" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
+            <line x1="13" y1="3" x2="3" y2="13" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      {pnuErr && <div style={{ color: '#c33', fontSize: '0.88rem' }}>{pnuErr}</div>}
+
+      {/* ── 면적선택 영역 ── */}
+      {selectedApt && (
+        <div style={{
+          flexShrink: 0,
+          marginLeft: isMobile ? -16 : isTablet ? -20 : -24,
+          paddingLeft: isMobile ? 16 : isTablet ? 20 : 24,
+        }}>
+          <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4 }}>
+            전용면적 선택 {areaRangeText && <span>{areaRangeText}</span>}
+          </div>
           <div
-            onClick={onOpenChartPanel}
-            style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 6, color: '#6B625B', cursor: 'pointer', display: 'inline-block' }}
-          >⭐ 즐겨찾기 단지 차트비교</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {favApts.map(fav => (
-              <div key={fav.key} style={{ padding: '4px 9px', borderRadius: 14, background: '#E6DED4', fontSize: '0.85rem', fontWeight: 600, color: '#1F1D1B' }}>
-                {trimAptName(fav.kaptName)}
-              </div>
-            ))}
+            ref={areaScrollRef}
+            className="area-tab-scroll"
+            onMouseDown={onAreaMouseDown}
+            onMouseMove={onAreaMouseMove}
+            onMouseUp={endAreaDrag}
+            onMouseLeave={endAreaDrag}
+            onTouchStart={onAreaTouchStart}
+            onTouchMove={onAreaTouchMove}
+            onTouchEnd={endAreaTouchDrag}
+            style={{
+              display: 'flex', gap: 0,
+              overflowX: 'auto', overflowY: 'visible',
+              borderBottom: '1px solid #E6DED4',
+              WebkitOverflowScrolling: 'touch',
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#D3D1C7 transparent',
+              cursor: dragRef.current?.down ? 'grabbing' : 'grab',
+              userSelect: 'none', touchAction: 'pan-x',
+              paddingBottom: 4,
+            }}
+          >
+            {areas.map((a) => {
+              const active  = selArea === a;
+              const hotRank = hotAreas.indexOf(a);
+              const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
+              return (
+                <div
+                  key={a}
+                  onClick={() => handleAreaClick(a)}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onTouchStart={(e) => e.stopPropagation()}
+                  style={{
+                    flex: '0 0 auto',
+                    padding: '6px 10px',
+                    fontSize: '0.78rem',
+                    fontWeight: active ? 700 : 400,
+                    color: active ? '#1F1D1B' : '#888780',
+                    borderBottom: active ? '2px solid #1F1D1B' : '2px solid transparent',
+                    marginBottom: -1,
+                    cursor: 'pointer',
+                    position: 'relative',
+                    whiteSpace: 'nowrap',
+                    transition: 'color 0.1s',
+                  }}
+                >
+                  {a.toFixed(1)}㎡
+                  {hotLabel && (
+                    <span style={{
+                      position: 'absolute', top: 0, right: 2,
+                      color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
+                      pointerEvents: 'none', transform: 'rotate(-12deg)',
+                      transformOrigin: 'center center', lineHeight: 1,
+                    }}>
+                      {hotLabel}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
+
+      {/* ── 그래프 영역 — 항상 고정 높이로 공간 확보 (미선택 시 광고/공지 placeholder) ── */}
+      <div style={{
+        width: '100%',
+        flexShrink: 0,
+        background: '#fff',
+        borderRadius: 8,
+        border: '0px solid #E6DED4',
+        marginTop: 4,
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        {selectedApt ? (
+          <>
+            {/* X축 기간 조정 — 데이터 있을 때만 */}
+            {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
+              <div style={{ flex: '0 0 auto', display: 'none', alignItems: 'center', gap: 6, padding: '6px 10px 4px', fontSize: '0.78rem', color: '#6B625B' }}>
+                <span style={{ minWidth: 76, fontWeight: 700, color: '#1F1D1B' }}>X축 기간 조정</span>
+                <button onClick={() => changeYearWindow(-1)} style={{ height: 28, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer', color: '#6B625B' }}>– 1년</button>
+                <span style={{ minWidth: 44, textAlign: 'center' }}>최근 {yearWindow}년</span>
+                <button onClick={() => changeYearWindow(+1)} style={{ height: 28, padding: '0 10px', border: '1px solid #C9BFB4', borderRadius: 6, background: '#F7F3EE', cursor: 'pointer', color: '#6B625B' }}>+ 1년</button>
+              </div>
+            )}
+
+            {/* 범례 — 데이터 있을 때만 */}
+            {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
+              <div style={{ display: 'flex', gap: 12, padding: '2px 10px 6px', flexWrap: 'wrap', fontSize: '0.78rem', fontWeight: 800, color: '#1F1D1B' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 12, height: 12, background: 'rgba(196,154,42,0.35)', display: 'inline-block', borderRadius: 2 }} />
+                  거래량
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 16, height: 2, background: 'rgba(196,154,42,0.7)', display: 'inline-block', borderRadius: 2 }} />
+                  평균가
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <svg width="10" height="10" viewBox="0 0 10 10">
+                    <circle cx="5" cy="5" r="4" fill="rgba(196,154,42,0.55)" stroke="rgba(196,154,42,0.85)" strokeWidth="1" />
+                  </svg>
+                  실거래
+                </span>
+                {pPtsX.length > 0 && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <svg width="10" height="10" viewBox="0 0 10 10">
+                      <polygon points="5,1 0,9 10,9" fill="rgba(196,154,42,0.55)" stroke="rgba(196,154,42,0.85)" strokeWidth="1" />
+                    </svg>
+                    입주권
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* 고정 높이 차트 영역 */}
+            <div style={{ height: isMobile ? 200 : 240, position: 'relative' }}>
+              {(loadingTrade || loadingInfo) && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6B625B', fontSize: '0.85rem' }}>
+                  로딩 중…
+                </div>
+              )}
+              {tradeErr && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c33', fontSize: '0.85rem' }}>
+                  {tradeErr}
+                </div>
+              )}
+              {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
+                <AptTradeChart
+                  x={x} vol={vol} avg={avg}
+                  ptsX={ptsX} ptsY={ptsY}
+                  pPtsX={pPtsX} pPtsY={pPtsY}
+                  yearWindow={yearWindow}
+                  isMobile={isMobile}
+                />
+              )}
+            </div>
+          </>
+        ) : (
+          /* TODO: 광고 또는 공지 컴포넌트로 교체 */
+          <div style={{ height: isMobile ? 200 : 240, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: '#F7F3EE', color: '#C9BFB4', fontSize: '0.85rem' }}>
+            지도에서 아파트를 클릭하면 거래 차트를 확인할 수 있어요
+          </div>
+        )}
+      </div>
+
+      {/* 즐겨찾기 단지 */}
+      {favApts.length > 0 && (
+        <div style={{ padding: '0 2px' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+            {/* 노란 세로 바 */}
+            <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
+            {/* 아파트 목록 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+              {favApts.map(fav => {
+                const isActive = fav.key === aptKey;
+                return (
+                  <div
+                    key={fav.key}
+                    onClick={() => onSelectApt?.(fav)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 4px', cursor: 'pointer' }}
+                  >
+                    <div style={{
+                      width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                      background: isActive ? '#6B625B' : '#C9BFB4',
+                    }} />
+                    <span style={{
+                      fontSize: '0.72rem', fontWeight: isActive ? 700 : 400,
+                      color: isActive ? '#1F1D1B' : '#888780',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {trimAptName(fav.kaptName)}
+                    </span>
+                    <span
+                      onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
+                      style={{ fontSize: '0.6rem', color: '#C9BFB4', cursor: 'pointer', lineHeight: 1 }}
+                    >✕</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <FinanceChart
+        isMobile={isMobile}
+        aptX={x}
+        aptAvg={avg}
+        aptName={selectedApt ? `${trimAptName(selectedApt.kaptName)} ${selArea}㎡` : null}
+        onOpenChartPanel={onOpenChartPanel}
+      />
+
     </aside>
   );
 }

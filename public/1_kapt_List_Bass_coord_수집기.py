@@ -264,9 +264,9 @@ def _clean_addr(addr: str) -> str:
 
 
 def geocode(row: dict) -> tuple:
-    """kaptAddr → kaptName → doroJuso 순으로 좌표 시도 → (lat, lng, n_calls)"""
+    """doroJuso → kaptAddr → kaptName 순으로 좌표 시도 → (lat, lng, n_calls)"""
     calls = 0
-    for key in ("kaptAddr", "kaptName", "doroJuso"):
+    for key in ("doroJuso", "kaptAddr", "kaptName"):
         val = str(row.get(key) or "").strip()
         if not val:
             continue

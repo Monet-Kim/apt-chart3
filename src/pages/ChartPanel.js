@@ -484,7 +484,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                 const hotList  = hotAreasByKey[activeKey] || [];
                 const hotRank  = hotList.indexOf(ar);
                 const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
-                const hotColor = hotRank === 0 ? '#c0392b' : '#b35a00';
+                const hotColor = '#b35a00';
                 const inSeries = series.some(s => s.key === activeKey && s.area === ar);
                 return (
                   <button
