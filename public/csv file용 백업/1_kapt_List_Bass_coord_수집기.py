@@ -559,8 +559,12 @@ class CollectorWorker(QThread):
         self.s_phase.emit(4, "Phase 4  R2 업로드")
         self.s_log.emit("══ Phase 4: Cloudflare R2 업로드 ══════════════════", "header")
         try:
-            # code5_map.json 갱신 (regions 목록 기준으로 생성 - 파일명 인코딩 깨짐 방지)
-            mapping = {reg["c5"]: reg["fname"] for reg in self.regions}
+            # code5_map.json 갱신
+            pat = re.compile(r"(.+)_(\d{5})_list_coord\.csv$")
+            mapping = {}
+            for f in OUTPUT_DIR.glob("*_list_coord.csv"):
+                m = pat.search(f.name)
+                if m: mapping[m.group(2)] = f.name
             map_path = OUTPUT_DIR / "code5_map.json"
             with open(map_path, "w", encoding="utf-8") as fp:
                 json.dump(mapping, fp, ensure_ascii=False)
