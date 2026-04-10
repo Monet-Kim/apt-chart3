@@ -26,9 +26,9 @@ async function loadCode5Map() {
 // code5 → KaptList CSV URL 생성
 export async function kaptListUrlByCode5(s1, s2, code5) {
   const map = await loadCode5Map();
-  if (map?.[code5]) return `${R2_BASE}/KaptList/${map[code5]}${CSV_SUFFIX}`;
-  if (s2) return `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv${CSV_SUFFIX}`;
-  return `${R2_BASE}/KaptList/${s1}_${code5}_list_coord.csv${CSV_SUFFIX}`;
+  if (map?.[code5]) return `${R2_BASE}/KaptList/${enc(map[code5])}${CSV_SUFFIX}`;
+  if (s2) return `${R2_BASE}/KaptList/${enc(`${s1}_${s2}_${code5}_list_coord.csv`)}${CSV_SUFFIX}`;
+  return `${R2_BASE}/KaptList/${enc(`${s1}_${code5}_list_coord.csv`)}${CSV_SUFFIX}`;
 }
 
 // 좌표 → KaptList CSV URL (역지오코딩, 카카오 SDK 필요)
@@ -62,7 +62,15 @@ export async function fetchKaptListRows(url) {
   try {
     const res = await fetch(url, { cache: 'force-cache' });
     if (!res.ok) return [];
-    const rows = parseCSV(await res.text()).map(row => ({
+    let text;
+    if (url.endsWith('.gz')) {
+      const ds = new DecompressionStream('gzip');
+      const decompressed = res.body.pipeThrough(ds);
+      text = await new Response(decompressed).text();
+    } else {
+      text = await res.text();
+    }
+    const rows = parseCSV(text).map(row => ({
       ...row,
       위도: parseFloat(row['위도']),
       경도: parseFloat(row['경도']),
@@ -200,7 +208,14 @@ async function fetchIndexedCsvs(folder, candidates) {
         const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv${CSV_SUFFIX}`)}`;
         return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
           if (!r.ok) throw new Error(`CSV HTTP ${r.status}`);
-          return parseCSV(await r.text(), false);
+          let text;
+          if (csvUrl.endsWith('.gz')) {
+            const ds = new DecompressionStream('gzip');
+            text = await new Response(r.body.pipeThrough(ds)).text();
+          } else {
+            text = await r.text();
+          }
+          return parseCSV(text, false);
         });
       });
 
