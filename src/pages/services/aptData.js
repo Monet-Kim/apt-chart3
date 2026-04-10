@@ -62,15 +62,7 @@ export async function fetchKaptListRows(url) {
   try {
     const res = await fetch(url, { cache: 'force-cache' });
     if (!res.ok) return [];
-    let text;
-    if (url.endsWith('.gz')) {
-      const ds = new DecompressionStream('gzip');
-      const decompressed = res.body.pipeThrough(ds);
-      text = await new Response(decompressed).text();
-    } else {
-      text = await res.text();
-    }
-    const rows = parseCSV(text).map(row => ({
+    const rows = parseCSV(await res.text()).map(row => ({
       ...row,
       위도: parseFloat(row['위도']),
       경도: parseFloat(row['경도']),
@@ -208,14 +200,7 @@ async function fetchIndexedCsvs(folder, candidates) {
         const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv${CSV_SUFFIX}`)}`;
         return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
           if (!r.ok) throw new Error(`CSV HTTP ${r.status}`);
-          let text;
-          if (csvUrl.endsWith('.gz')) {
-            const ds = new DecompressionStream('gzip');
-            text = await new Response(r.body.pipeThrough(ds)).text();
-          } else {
-            text = await r.text();
-          }
-          return parseCSV(text, false);
+          return parseCSV(await r.text(), false);
         });
       });
 

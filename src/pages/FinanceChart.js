@@ -62,14 +62,7 @@ async function fetchFinanceData(assetKey) {
     const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv${CSV_SUFFIX}`)}`;
     return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
       if (!r.ok) return [];
-      let text;
-      if (csvUrl.endsWith('.gz')) {
-        const ds = new DecompressionStream('gzip');
-        text = await new Response(r.body.pipeThrough(ds)).text();
-      } else {
-        text = await r.text();
-      }
-      return parseCSV(text);
+      return parseCSV(await r.text());
     });
   });
 
