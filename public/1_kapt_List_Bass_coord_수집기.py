@@ -23,7 +23,7 @@ KAPT 통합 데이터 수집기  v2.0
 ══════════════════════════════════════════════════════════════════
 """
 
-import sys, re, time, html, csv, logging, traceback, json, gzip
+import sys, re, time, html, csv, logging, traceback, json
 from datetime import datetime, timezone
 import requests
 import boto3
@@ -554,7 +554,7 @@ class CollectorWorker(QThread):
                 _save_coord_last(path, df)
                 self.s_log.emit(f"  ✅ {path.name} 저장 완료", "ok")
 
-    # ── Phase 4: R2 업로드 (gzip 압축 후 업로드) ─────────────────
+    # ── Phase 4: R2 업로드 ─────────────────────────────────────
     def _phase4(self):
         self.s_phase.emit(4, "Phase 4  R2 업로드")
         self.s_log.emit("══ Phase 4: Cloudflare R2 업로드 ══════════════════", "header")
@@ -590,29 +590,15 @@ class CollectorWorker(QThread):
 
             for i, file_path in enumerate(files, 1):
                 if self._stop: break
-                # json은 그대로, csv는 gzip 압축해서 .csv.gz로 업로드
-                if file_path.suffix == ".csv":
-                    gz_key = f"KaptList/{file_path.stem}.csv.gz"
-                    local_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
-                    if gz_key in existing and local_dt <= existing[gz_key]:
-                        skipped += 1; continue
-                    self.s_prog1.emit(i, total_f, file_path.name)
-                    with open(file_path, "rb") as f_in:
-                        compressed = gzip.compress(f_in.read())
-                    s3.put_object(Bucket=R2_BUCKET, Key=gz_key, Body=compressed,
-                        ContentType="application/gzip")
-                else:
-                    key = f"KaptList/{file_path.name}"
-                    local_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
-                    if key in existing and local_dt <= existing[key]:
-                        skipped += 1; continue
-                    self.s_prog1.emit(i, total_f, file_path.name)
-                    s3.upload_file(str(file_path), R2_BUCKET, key)
-
+                key = f"KaptList/{file_path.name}"
+                local_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+                if key in existing and local_dt <= existing[key]:
+                    skipped += 1; continue
+                self.s_prog1.emit(i, total_f, file_path.name)
+                s3.upload_file(str(file_path), R2_BUCKET, key)
                 uploaded += 1
                 self.n_upload += 1
-                log_name = gz_key.split("/")[-1] if file_path.suffix == ".csv" else file_path.name
-                self.s_log.emit(f"  ↑ {log_name}", "data")
+                self.s_log.emit(f"  ↑ {file_path.name}", "data")
 
             self.s_log.emit(f"  ✅ 업로드 완료  (신규/갱신: {uploaded}개 / 건너뜀: {skipped}개)", "ok")
 

@@ -1,14 +1,13 @@
 // src/pages/LeftPanel.js
 import FinanceChart from './FinanceChart';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { createChart, LineSeries, HistogramSeries, LineStyle } from 'lightweight-charts';
+import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
-  kaptListUrlByCode5, fetchKaptListRows,
 } from './services/aptData';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 
@@ -105,13 +104,12 @@ function makeChartOptions(height) {
 // ────────────────────────────────────────────
 // 아파트 거래 차트 컴포넌트
 // ────────────────────────────────────────────
-function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile }) {
-  const containerRef    = useRef(null);
-  const chartRef        = useRef(null);
-  const volSeriesRef    = useRef(null);
-  const avgSeriesRef    = useRef(null);  // 실선 (실데이터)
-  const avgDashSeriesRef = useRef(null); // 점선 (보간)
-  const svgRef          = useRef(null);
+function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile }) {
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const volSeriesRef = useRef(null);
+  const avgSeriesRef = useRef(null);
+  const svgRef       = useRef(null);
 
   const chartHeight = isMobile ? 200 : 240;
 
@@ -205,11 +203,10 @@ function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWi
     });
     volSeriesRef.current = volSeries;
 
-    // 평균가 실선 (실거래 데이터)
+    // 평균가 라인
     const avgSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(196, 154, 42, 0.85)',
+      color: 'rgba(196, 154, 42, 0.7)',
       lineWidth: 2,
-      lineStyle: LineStyle.Solid,
       priceScaleId: 'right',
       lastValueVisible: true,
       priceLineVisible: false,
@@ -222,23 +219,6 @@ function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWi
       },
     });
     avgSeriesRef.current = avgSeries;
-
-    // 평균가 점선 (보간 구간)
-    const avgDashSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(196, 154, 42, 0.4)',
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      priceScaleId: 'right',
-      lastValueVisible: false,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
-      priceFormat: {
-        type: 'custom',
-        formatter: (v) => `${v.toFixed(1)}억`,
-        minMove: 0.01,
-      },
-    });
-    avgDashSeriesRef.current = avgDashSeries;
 
     // X/Y축 변경 모두 대응 — RAF 루프 (항상 최신 ref 호출)
     let rafId;
@@ -262,7 +242,6 @@ function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWi
       chartRef.current = null;
       volSeriesRef.current = null;
       avgSeriesRef.current = null;
-      avgDashSeriesRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -278,20 +257,12 @@ function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWi
     })).sort((a, b) => a.time > b.time ? 1 : -1);
     volSeriesRef.current?.setData(volData);
 
-    // 평균가: 실선(실거래) / 점선(보간) 분리
-    // lightweight-charts는 null로 끊어야 구간이 분리되므로
-    // 실선: 보간 구간은 null, 점선: 실거래 구간은 null
-    const solidData = [], dashData = [];
-    x.forEach((ym, i) => {
-      const t = toTime(ym);
-      const v = avg[i] || null;
-      const isReal = realMask?.[i] ?? true;
-      solidData.push({ time: t, value: isReal ? v : null });
-      dashData.push({ time: t, value: isReal ? null : v });
-    });
-    const sorted = (arr) => arr.filter(d => d.value !== null && d.value !== undefined).sort((a, b) => a.time > b.time ? 1 : -1);
-    avgSeriesRef.current?.setData(sorted(solidData));
-    avgDashSeriesRef.current?.setData(sorted(dashData));
+    // 평균가 데이터 (0 제외)
+    const avgData = x.map((ym, i) => ({
+      time: toTime(ym),
+      value: avg[i] || null,
+    })).filter(d => d.value).sort((a, b) => a.time > b.time ? 1 : -1);
+    avgSeriesRef.current?.setData(avgData);
 
     // X축 범위 설정
     requestAnimationFrame(() => {
@@ -307,7 +278,7 @@ function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWi
       }
       redrawDotsRef.current?.();
     });
-  }, [x, vol, avg, realMask, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [x, vol, avg, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // yearWindow 변경 시 X축 범위 업데이트
   useEffect(() => {
@@ -375,7 +346,6 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [x, setX] = useState([]);
   const [vol, setVol] = useState([]);
   const [avg, setAvg] = useState([]);
-  const [realMask, setRealMask] = useState([]);
   const [ptsX, setPtsX] = useState([]);
   const [ptsY, setPtsY] = useState([]);
   const [pPtsX, setPPtsX] = useState([]);
@@ -392,7 +362,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [hotAreas, setHotAreas] = useState([]);
 
   // 스무딩 윈도우
-  const [smoothWindow, setSmoothWindow] = useState(0);
+  const [smoothWindow, setSmoothWindow] = useState(3);
 
   // X축 기간
   const [yearWindow, setYearWindow] = useState(5);
@@ -440,8 +410,28 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         const s2 = b.region_2depth_name || '';
         if (!code5 || !s1 || !s2) return;
 
-        const url = await kaptListUrlByCode5(s1, s2, code5);
-        const rows = await fetchKaptListRows(url);
+        const R2_BASE = process.env.NODE_ENV === 'production'
+          ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
+          : '';
+
+        // code5_map.json으로 정확한 파일명 조회
+        let fileName = `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`;
+        try {
+          const mapRes = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+          if (mapRes.ok) {
+            const mapJson = await mapRes.json();
+            if (mapJson?.[code5]) fileName = `${R2_BASE}/KaptList/${mapJson[code5]}`;
+          }
+        } catch { /* 폴백 파일명 사용 */ }
+
+        const csvRes = await fetch(fileName, { cache: 'no-store' });
+        if (!csvRes.ok) return;
+        const { parseCSV } = await import('../utils/csvUtils');
+        const rows = parseCSV(await csvRes.text()).map(row => ({
+          ...row,
+          위도: parseFloat(row['위도']),
+          경도: parseFloat(row['경도']),
+        }));
 
         // 검색 좌표와 가장 가까운 아파트 찾기 (300m 이내)
         let best = null, bestDist = Infinity;
@@ -467,7 +457,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
     async function run() {
       setPnu(null); setPnuErr(null);
       setAreas([]); setSelArea(null);
-      setX([]); setVol([]); setAvg([]); setRealMask([]); setPtsX([]); setPtsY([]);
+      setX([]); setVol([]); setAvg([]); setPtsX([]); setPtsY([]);
       setPPtsX([]); setPPtsY([]);
       pdWbRef.current    = null;
       wbRef.current      = null;
@@ -562,7 +552,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           pnuIndex, nameIndex, pdNameIndex: _pdNameIndex,
         });
         if (!cancelled) {
-          setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
+          setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
           setPtsX(agg.ptsX); setPtsY(agg.ptsY);
           setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
           setYearWindow(5);
@@ -593,7 +583,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
         });
         if (!cancelled) {
-          setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
+          setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
           setPtsX(agg.ptsX); setPtsY(agg.ptsY);
           setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
         }
@@ -619,7 +609,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         areaNorm: area, smoothWindow,
         pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
       });
-      setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
+      setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
       setPtsX(agg.ptsX); setPtsY(agg.ptsY);
       setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
       setYearWindow(5);
@@ -975,7 +965,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
               )}
               {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
                 <AptTradeChart
-                  x={x} vol={vol} avg={avg} realMask={realMask}
+                  x={x} vol={vol} avg={avg}
                   ptsX={ptsX} ptsY={ptsY}
                   pPtsX={pPtsX} pPtsY={pPtsY}
                   yearWindow={yearWindow}

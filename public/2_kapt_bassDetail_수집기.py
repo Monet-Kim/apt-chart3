@@ -22,7 +22,7 @@ KAPT 상세정보 수집기
 ══════════════════════════════════════════════════════════════════
 """
 
-import csv, html, json, gzip, logging, pathlib, re, sys, time, traceback
+import csv, html, json, logging, pathlib, re, sys, time, traceback
 from collections import OrderedDict
 from datetime import datetime, timezone
 
@@ -255,7 +255,7 @@ class CollectorWorker(QThread):
                 save_csv(dst, existing)
                 self.s_log.emit(f"  ✅ {dst.name} 저장 완료 ({len(existing):,}건)", "ok")
 
-    # ── Step 2: R2 업로드 (gzip 압축) ───────────────────────────
+    # ── Step 2: R2 업로드 ────────────────────────────────────────
     def _step2(self):
         self.s_log.emit("══ Step 2: Cloudflare R2 업로드 ══════════════════", "header")
         try:
@@ -278,23 +278,12 @@ class CollectorWorker(QThread):
 
             for i, fp in enumerate(files, 1):
                 if self._stop: break
-                if fp.suffix == ".csv":
-                    key = f"{R2_FOLDER}/{fp.stem}.csv.gz"
-                    local_dt = datetime.fromtimestamp(fp.stat().st_mtime, tz=timezone.utc)
-                    if key in existing and local_dt <= existing[key]:
-                        skipped += 1; continue
-                    self.s_prog1.emit(i, total_f, fp.name)
-                    with open(fp, "rb") as f_in:
-                        compressed = gzip.compress(f_in.read())
-                    s3.put_object(Bucket=R2_BUCKET, Key=key, Body=compressed,
-                        ContentType="text/csv", ContentEncoding="gzip")
-                else:
-                    key = f"{R2_FOLDER}/{fp.name}"
-                    local_dt = datetime.fromtimestamp(fp.stat().st_mtime, tz=timezone.utc)
-                    if key in existing and local_dt <= existing[key]:
-                        skipped += 1; continue
-                    self.s_prog1.emit(i, total_f, fp.name)
-                    s3.upload_file(str(fp), R2_BUCKET, key)
+                key = f"{R2_FOLDER}/{fp.name}"
+                local_dt = datetime.fromtimestamp(fp.stat().st_mtime, tz=timezone.utc)
+                if key in existing and local_dt <= existing[key]:
+                    skipped += 1; continue
+                self.s_prog1.emit(i, total_f, fp.name)
+                s3.upload_file(str(fp), R2_BUCKET, key)
 
                 uploaded += 1; self.n_upload += 1
                 self.s_log.emit(f"  ↑ {fp.name}", "data")

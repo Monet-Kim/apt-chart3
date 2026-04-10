@@ -4,7 +4,7 @@
 # 생성 파일: finance_{TICKER}_index.json + finance_{TICKER}_{YEAR}.csv
 # R2 폴더: /finance/
 
-import os, glob, re, json, gzip, logging, sys, time
+import os, glob, re, json, logging, sys, time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -691,7 +691,7 @@ class CollectorWorker(QThread):
                 break
 
             ext = local_path.suffix
-            r2_key = f"{R2_FOLDER}/{local_path.name}{'.gz' if ext == '.csv' else ''}"
+            r2_key = f"{R2_FOLDER}/{local_path.name}"
 
             r2_mtime = None
             try:
@@ -711,17 +711,10 @@ class CollectorWorker(QThread):
                 with open(local_path, "rb") as f_in:
                     raw = f_in.read()
 
-                if ext == ".csv":
-                    body = gzip.compress(raw)
-                    ct, ce = "text/csv", "gzip"
-                else:
-                    body = raw
-                    ct, ce = "application/json", None
+                body = raw
+                ct = "text/csv" if ext == ".csv" else "application/json"
 
-                kwargs = dict(Bucket=R2_BUCKET, Key=r2_key, Body=body, ContentType=ct)
-                if ce:
-                    kwargs["ContentEncoding"] = ce
-                s3.put_object(**kwargs)
+                s3.put_object(Bucket=R2_BUCKET, Key=r2_key, Body=body, ContentType=ct)
 
                 self._log(f"  ✅ 업로드: {r2_key}  ({len(body):,} bytes)", "ok")
                 self._logger.info(f"uploaded {r2_key} ({len(body)} bytes)")
@@ -893,7 +886,7 @@ class MainWindow(QMainWindow):
         # 초기 메시지
         self.log.append_colored("금융 데이터 수집기가 준비됐습니다.", "ok")
         self.log.append_colored(f"저장 경로: {BASE_DIR}", "info")
-        self.log.append_colored(f"R2 버킷: {R2_BUCKET} / {R2_FOLDER}  (.csv.gz 업로드)", "info")
+        self.log.append_colored(f"R2 버킷: {R2_BUCKET} / {R2_FOLDER}  (.csv 업로드)", "info")
 
     def _all_step_btns(self):
         return (self.btn_collect, self.btn_r2, self.btn_all)

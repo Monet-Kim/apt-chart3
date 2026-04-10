@@ -24,8 +24,6 @@ const loadCode5Map = async () => {
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
   : "";
-const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
-const enc = (s) => encodeURIComponent(s);
 // n×n 격자 샘플 포인트 (줌 레벨이 높을수록 뷰포트가 넓어 더 많이 필요)
 const makeGridPoints = (bbox, n = 3) => {
   const lats = Array.from({ length: n }, (_, i) =>
@@ -45,7 +43,7 @@ const pointToFile = (pt) => {
   return new Promise((resolve) => {
     const geocoder = new window.kakao.maps.services.Geocoder();
     geocoder.coord2RegionCode(pt.lng, pt.lat, async (res, status) => {
-      const fallback = `${R2_BASE}/KaptList/${enc(`서울특별시_송파구_11710_list_coord.csv`)}${CSV_SUFFIX}`;
+      const fallback = `${R2_BASE}/KaptList/서울특별시_송파구_11710_list_coord.csv`;
       if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
         geocodeCache.set(cacheKey, fallback);
         resolve(fallback);
@@ -56,8 +54,8 @@ const pointToFile = (pt) => {
 
       const map = await loadCode5Map();
       const filename = map?.[code5]
-        ? `${R2_BASE}/KaptList/${enc(map[code5])}${CSV_SUFFIX}`
-        : `${R2_BASE}/KaptList/${enc(`${b.region_1depth_name || '서울특별시'}_${b.region_2depth_name || '송파구'}_${code5}_list_coord.csv`)}${CSV_SUFFIX}`;
+        ? `${R2_BASE}/KaptList/${map[code5]}`
+        : `${R2_BASE}/KaptList/${b.region_1depth_name || '서울특별시'}_${b.region_2depth_name || '송파구'}_${code5}_list_coord.csv`;
 
       geocodeCache.set(cacheKey, filename);
       resolve(filename);
@@ -71,14 +69,7 @@ const loadFile = async (file) => {
   try {
     const res = await fetch(file, { cache: 'force-cache' });
     if (!res.ok) return [];
-    let text;
-    if (file.endsWith('.gz')) {
-      const ds = new DecompressionStream('gzip');
-      text = await new Response(res.body.pipeThrough(ds)).text();
-    } else {
-      text = await res.text();
-    }
-    const rows = parseCSV(text).map(row => ({
+    const rows = parseCSV(await res.text()).map(row => ({
       ...row,
       위도: parseFloat(row['위도']),
       경도: parseFloat(row['경도']),

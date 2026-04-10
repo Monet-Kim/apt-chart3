@@ -12,6 +12,7 @@ import { createChart, LineSeries } from 'lightweight-charts';
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
   : '';
+const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
 
 const ASSETS = [
   { key: 'SP500',  label: 'S&P500',  color: '#C1614E',
@@ -46,27 +47,40 @@ const financeCache = new Map();
 // ────────────────────────────────────────────
 // R2에서 index.json + 연도별 CSV 로드
 // ────────────────────────────────────────────
+// 연도별 CSV를 batchSize씩 나눠서 순차 요청 (동시 요청 폭발 방지)
+async function fetchInBatches(urls, batchSize = 6) {
+  const rows = [];
+  for (let i = 0; i < urls.length; i += batchSize) {
+    const batch = urls.slice(i, i + batchSize);
+    const results = await Promise.all(
+      batch.map(url =>
+        fetch(url, { cache: 'force-cache' }).then(async (r) => {
+          if (!r.ok) return [];
+          return parseCSV(await r.text());
+        })
+      )
+    );
+    rows.push(...results.flat());
+  }
+  return rows;
+}
+
 async function fetchFinanceData(assetKey) {
   if (financeCache.has(assetKey)) return financeCache.get(assetKey);
 
   const idxUrl = `${R2_BASE}/finance_data/finance_${assetKey}_index.json`;
-  const idxRes = await fetch(idxUrl, { cache: 'no-store' });
+  const idxRes = await fetch(idxUrl, { cache: 'force-cache' });
   if (!idxRes.ok) throw new Error(`index.json 없음: ${assetKey}`);
   const idx = await idxRes.json();
   const years = Array.isArray(idx.years) ? idx.years : [];
   if (!years.length) throw new Error(`years 비어있음: ${assetKey}`);
 
   const enc = (s) => encodeURIComponent(s);
-  const tasks = years.map((y) => {
-    const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv`)}`;
-    return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
-      if (!r.ok) return [];
-      const text = await r.text();
-      return parseCSV(text);
-    });
-  });
+  const urls = years.map((y) =>
+    `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv${CSV_SUFFIX}`)}`
+  );
 
-  const rows = (await Promise.all(tasks)).flat();
+  const rows = await fetchInBatches(urls, 6);
   rows.sort((a, b) => (a.date > b.date ? 1 : -1));
   const result = { weekly: rows, latestDate: idx.latest_date };
   financeCache.set(assetKey, result);

@@ -12,7 +12,6 @@ import { createChart, LineSeries } from 'lightweight-charts';
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
   : '';
-const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
 
 const ASSETS = [
   { key: 'SP500',  label: 'S&P500',  color: '#C1614E',
@@ -59,10 +58,11 @@ async function fetchFinanceData(assetKey) {
 
   const enc = (s) => encodeURIComponent(s);
   const tasks = years.map((y) => {
-    const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv${CSV_SUFFIX}`)}`;
+    const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv`)}`;
     return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
       if (!r.ok) return [];
-      return parseCSV(await r.text());
+      const text = await r.text();
+      return parseCSV(text);
     });
   });
 

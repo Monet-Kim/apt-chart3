@@ -7,7 +7,7 @@ MP 부동산 데이터 수집기
 - 버그 수정 완료
 """
 
-import os, re, glob, json, gzip, time, ssl, sys, logging
+import os, re, glob, json, time, ssl, sys, logging
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -547,7 +547,7 @@ class WorkerThread(QThread):
                     break
 
                 ext = local_path.suffix  # .csv or .json
-                r2_key = f"{r2_folder}/{local_path.name}{'.gz' if ext == '.csv' else ''}"
+                r2_key = f"{r2_folder}/{local_path.name}"
 
                 # R2 수정 시각 조회
                 r2_mtime = None
@@ -569,23 +569,10 @@ class WorkerThread(QThread):
                     with open(local_path, "rb") as f_in:
                         raw = f_in.read()
 
-                    if ext == ".csv":
-                        body = gzip.compress(raw)
-                        ct, ce = "text/csv", "gzip"
-                    else:
-                        body = raw
-                        ct, ce = "application/json", None
+                    body = raw
+                    ct = "text/csv" if ext == ".csv" else "application/json"
 
-                    kwargs = dict(
-                        Bucket=R2_BUCKET,
-                        Key=r2_key,
-                        Body=body,
-                        ContentType=ct,
-                    )
-                    if ce:
-                        kwargs["ContentEncoding"] = ce
-
-                    s3.put_object(**kwargs)
+                    s3.put_object(Bucket=R2_BUCKET, Key=r2_key, Body=body, ContentType=ct)
                     self.sig_log.emit(f"  ✅ 업로드: {r2_key}  ({len(body):,} bytes)", "ok")
                     self._logger.info(f"uploaded {r2_key} ({len(body)} bytes)")
                     uploaded += 1
@@ -1033,7 +1020,7 @@ class MainWindow(QMainWindow):
         self.log.append_colored(f"Rdata 저장 경로: {RDATA_DIR}", "info")
         self.log.append_colored(f"Pdata 저장 경로: {PDATA_DIR}", "info")
         self.log.append_colored(f"API 일일 한도: {API_LIMIT:,}회 / R 시작연월 기본값: 2006년 1월", "info")
-        self.log.append_colored(f"R2 버킷: {R2_BUCKET}  (Rdata/, Pdata/ 폴더에 .csv.gz 업로드)", "info")
+        self.log.append_colored(f"R2 버킷: {R2_BUCKET}  (Rdata/, Pdata/ 폴더에 .csv 업로드)", "info")
 
     # ── 타이머 tick ──
     def _tick(self):
