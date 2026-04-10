@@ -23,9 +23,10 @@ KAPT 통합 데이터 수집기  v2.0
 ══════════════════════════════════════════════════════════════════
 """
 
-import sys, re, time, html, csv, logging, traceback
-from datetime import datetime
+import sys, re, time, html, csv, logging, traceback, json, gzip
+from datetime import datetime, timezone
 import requests
+import boto3
 import pandas as pd
 from pathlib import Path
 
@@ -45,8 +46,14 @@ from PyQt6.QtGui  import QFont, QTextCursor
 SERVICE_KEY = "HcVtWuaWvdDSFSZQtcDh5WXItVvZ9Wof23DGfIzh0fUEGb9v06BprdP6QIPK2rVTVsHKx9i3WgsXWYXOZE4vbg=="
 LIST_URL    = "http://apis.data.go.kr/1613000/AptListService3/getSigunguAptList3"
 BASS_URL    = "http://apis.data.go.kr/1613000/AptBasisInfoServiceV4/getAphusBassInfoV4"
-KAKAO_KEY   = "8d96a5618bd5f430218b25347d0382c7"
-KAKAO_URL   = "https://dapi.kakao.com/v2/local/search/address.json"
+KAKAO_KEY         = "8d96a5618bd5f430218b25347d0382c7"
+KAKAO_URL         = "https://dapi.kakao.com/v2/local/search/address.json"
+KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
+
+R2_ACCESS_KEY = "71e270652969acf7a661d46404a196c6"
+R2_SECRET_KEY = "e0bdd25cd87d66f24a08e7d98387196fa2316bec40d8fe3b0426aa308fa609d4"
+R2_ENDPOINT   = "https://485ad5b19488023956187106c5f363d2.r2.cloudflarestorage.com"
+R2_BUCKET     = "apt-chart-data"
 
 LIST_LIMIT  = 10_000
 BASS_LIMIT  = 1_000_000
@@ -210,13 +217,39 @@ def fetch_bass_info(kapt_code: str, retries: int = 3) -> dict:
             if r.status_code != 200:
                 logger.warning(f"[fetch_bass_info] kaptCode={kapt_code} HTTP {r.status_code} (시도 {i+1}/{retries})")
             item = r.json().get("response", {}).get("body", {}).get("item", {})
-            time.sleep(0.2)
+            time.sleep(0.1)
             return item if isinstance(item, dict) else {}
         except Exception as e:
             logger.error(f"[fetch_bass_info] kaptCode={kapt_code} 시도 {i+1}/{retries} 오류: {e}\n{traceback.format_exc()}")
             time.sleep(0.3 * (i + 1))
     logger.error(f"[fetch_bass_info] kaptCode={kapt_code} {retries}회 재시도 모두 실패 — 빈 dict 반환")
     return {}
+
+
+def _kakao_keyword_req(query: str) -> tuple:
+    """카카오 키워드 검색 API → (lat, lng)  ※ 단지명 검색 전용"""
+    if not query.strip():
+        return "", ""
+    try:
+        time.sleep(0.05)
+        r = requests.get(KAKAO_KEYWORD_URL,
+            headers={"Authorization": f"KakaoAK {KAKAO_KEY}"},
+            params={"query": query, "category_group_code": "AD5"}, timeout=5)
+        if r.status_code == 401:
+            logger.critical(f"[카카오 키워드] 인증 실패 (401). query={query}")
+            return "", ""
+        if r.status_code == 429:
+            logger.warning(f"[카카오 키워드] 일일 한도 초과 (429). query={query}")
+            return "", ""
+        if r.status_code != 200:
+            logger.warning(f"[카카오 키워드] HTTP {r.status_code}. query={query}")
+            return "", ""
+        docs = r.json().get("documents", [])
+        if docs:
+            return docs[0].get("y", ""), docs[0].get("x", "")
+    except Exception as e:
+        logger.error(f"[카카오 키워드] 요청 오류: {e} query={query}\n{traceback.format_exc()}")
+    return "", ""
 
 
 def _kakao_req(query: str) -> tuple:
@@ -242,10 +275,10 @@ def _kakao_req(query: str) -> tuple:
             logger.debug(f"[카카오] 검색 결과 없음. query={query}")
         if docs:
             doc  = docs[0]
-            addr = doc.get("address") or {}
             road = doc.get("road_address") or {}
-            return (addr.get("y") or road.get("y") or ""), \
-                   (addr.get("x") or road.get("x") or "")
+            addr = doc.get("address") or {}
+            return (road.get("y") or addr.get("y") or ""), \
+                   (road.get("x") or addr.get("x") or "")
     except Exception as e:
         logger.error(f"[카카오] 요청 오류: {e} query={query}\n{traceback.format_exc()}")
     return "", ""
@@ -264,9 +297,22 @@ def _clean_addr(addr: str) -> str:
 
 
 def geocode(row: dict) -> tuple:
-    """doroJuso → kaptAddr → kaptName 순으로 좌표 시도 → (lat, lng, n_calls)"""
+    """단지명(키워드) → doroJuso → kaptAddr 순으로 좌표 시도 (도로명 우선) → (lat, lng, n_calls)"""
     calls = 0
-    for key in ("doroJuso", "kaptAddr", "kaptName"):
+
+    # 1순위: 단지명 + 지역(as1 + as3 or as2) → 키워드 검색 API
+    kname  = str(row.get("kaptName") or "").strip()
+    as1    = str(row.get("as1") or "").strip()
+    region = str(row.get("as3") or row.get("as2") or "").strip()
+    if kname:
+        q = f"{as1} {region} {kname}".strip()
+        calls += 1
+        lat, lng = _kakao_keyword_req(q)
+        if lat and lng:
+            return lat, lng, calls
+
+    # 2순위: doroJuso → 주소 검색 API
+    for key in ("doroJuso", "kaptAddr"):
         val = str(row.get(key) or "").strip()
         if not val:
             continue
@@ -275,6 +321,7 @@ def geocode(row: dict) -> tuple:
         lat, lng = _kakao_req(q)
         if lat and lng:
             return lat, lng, calls
+
     return "", "", calls
 
 
@@ -348,12 +395,16 @@ class CollectorWorker(QThread):
     s_prog2   = pyqtSignal(int, int)       # (current, total)        ← 하단 바
     s_api     = pyqtSignal(int, int, int)  # (n_list, n_bass, n_kakao)
     s_done    = pyqtSignal(str)
+    s_r2log   = pyqtSignal(str, str)   # R2 업로드 로그 (message, level)
 
-    def __init__(self, regions: list):
+    def __init__(self, regions: list, start_phase: int = 1, end_phase: int = 4):
         super().__init__()
-        self.regions = regions
-        self._stop   = False
-        self.n_list  = self.n_bass = self.n_kakao = 0
+        self.regions     = regions
+        self._stop       = False
+        self.n_list      = self.n_bass = self.n_kakao = 0
+        self.n_upload    = 0
+        self.start_phase = start_phase
+        self.end_phase   = end_phase
 
     def stop(self):
         self._stop = True
@@ -373,24 +424,27 @@ class CollectorWorker(QThread):
 
     def _run_inner(self):
         OUTPUT_DIR.mkdir(exist_ok=True)
+        for phase in range(self.start_phase, self.end_phase + 1):
+            if self._stop:
+                break
+            if   phase == 1: self._phase1()
+            elif phase == 2: self._phase2()
+            elif phase == 3: self._phase3()
+            elif phase == 4: self._phase4()
+        self._finish()
 
-        # ══════════════════════════════════════════════════════════
-        #  Phase 1: 아파트 목록 수집 → CSV 생성
-        # ══════════════════════════════════════════════════════════
+    # ── Phase 1: 아파트 목록 수집 ────────────────────────────────
+    def _phase1(self):
         self.s_phase.emit(1, "Phase 1  아파트 목록 수집")
         self.s_log.emit("══ Phase 1: 아파트 목록 수집 ══════════════════", "header")
         total = len(self.regions)
 
         for idx, reg in enumerate(self.regions, 1):
-            if self._stop:
-                break
+            if self._stop: break
             if self.n_list >= LIST_LIMIT:
-                self.s_log.emit("⚠ 목록 API 일일 한도 초과. Phase 1 중단.", "warn")
-                break
+                self.s_log.emit("⚠ 목록 API 일일 한도 초과. Phase 1 중단.", "warn"); break
 
-            c5   = reg["c5"]
-            name = reg["name"]
-            path = OUTPUT_DIR / reg["fname"]
+            c5, name, path = reg["c5"], reg["name"], OUTPUT_DIR / reg["fname"]
             self.s_prog1.emit(idx, total, name)
 
             apt_items, n_req = fetch_apt_list(c5)
@@ -398,147 +452,100 @@ class CollectorWorker(QThread):
             self._emit_api()
 
             if not apt_items:
-                self.s_log.emit(f"  [{idx}/{total}] {name} — 목록 없음 (요청 {n_req}회)", "skip")
-                continue
+                self.s_log.emit(f"  [{idx}/{total}] {name} — 목록 없음 (요청 {n_req}회)", "skip"); continue
 
-            # 기존 파일의 kaptCode 확인 → 신규만 추가
             existing_codes: set = set()
             if path.exists():
                 df_ex = _read_csv(path)
                 if "kaptCode" in df_ex.columns:
                     existing_codes = set(df_ex["kaptCode"].str.strip())
 
-            new_items = [it for it in apt_items
-                         if _sanitize(it.get("kaptCode")) not in existing_codes]
-
+            new_items = [it for it in apt_items if _sanitize(it.get("kaptCode")) not in existing_codes]
             if not new_items:
-                self.s_log.emit(
-                    f"  [{idx}/{total}] {name} — 기존 {len(existing_codes)}개 (신규 없음)", "skip")
-                continue
+                self.s_log.emit(f"  [{idx}/{total}] {name} — 기존 {len(existing_codes)}개 (신규 없음)", "skip"); continue
 
             _phase1_save(path, new_items)
             self.s_log.emit(
                 f"  [{idx}/{total}] {name} — +{len(new_items)}개 저장"
                 f"  (누계 {len(existing_codes) + len(new_items)}개, API {n_req}회)", "ok")
 
-        if self._stop:
-            self._finish()
-            return
-
-        # ══════════════════════════════════════════════════════════
-        #  Phase 2: 단지 기본정보 추가
-        # ══════════════════════════════════════════════════════════
+    # ── Phase 2: 단지 기본정보 추가 ──────────────────────────────
+    def _phase2(self):
         self.s_phase.emit(2, "Phase 2  단지 기본정보 추가")
         self.s_log.emit("══ Phase 2: 단지 기본정보 추가 ══════════════════", "header")
-
-        csv_files  = sorted(OUTPUT_DIR.glob("*_list_coord.csv"))
-        total_f    = len(csv_files)
+        csv_files = sorted(OUTPUT_DIR.glob("*_list_coord.csv"))
+        total_f   = len(csv_files)
 
         for fi, path in enumerate(csv_files, 1):
-            if self._stop:
-                break
-
+            if self._stop: break
             df      = _read_csv(path)
             pending = _phase2_pending(df)
-
             self.s_prog1.emit(fi, total_f, path.name)
-
             if not pending:
-                self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — 기본정보 완료 (skip)", "skip")
-                continue
+                self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — 기본정보 완료 (skip)", "skip"); continue
 
-            self.s_log.emit(
-                f"  [{fi}/{total_f}] {path.name} — {len(pending)}행 처리 예정", "info")
-
-            # ITEM_KEYS 컬럼 확보
+            self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — {len(pending)}행 처리 예정", "info")
             for k in ITEM_KEYS:
-                if k not in df.columns:
-                    df[k] = ""
+                if k not in df.columns: df[k] = ""
 
             changed = False
             for ai, row_idx in enumerate(pending, 1):
-                if self._stop:
-                    break
+                if self._stop: break
                 if self.n_bass >= BASS_LIMIT:
                     self.s_log.emit("⚠ 기본정보 API 일일 한도 초과. 중단.", "warn")
-                    self._stop = True
-                    break
+                    self._stop = True; break
 
-                kcode = df.at[row_idx, "kaptCode"]
-                kname = df.at[row_idx, "kaptName"]
-                bass  = fetch_bass_info(kcode)
+                kcode, kname = df.at[row_idx, "kaptCode"], df.at[row_idx, "kaptName"]
+                bass = fetch_bass_info(kcode)
                 self.n_bass += 1
                 self._emit_api()
                 self.s_prog2.emit(ai, len(pending))
 
                 for k in ITEM_KEYS:
                     df.at[row_idx, k] = _sanitize(bass.get(k))
-
-                # ITEM_KEYS 외 추가 필드도 반영
                 for k, v in bass.items():
                     if k not in ITEM_KEYS:
-                        if k not in df.columns:
-                            df[k] = ""
+                        if k not in df.columns: df[k] = ""
                         df.at[row_idx, k] = _sanitize(v)
 
                 changed = True
                 kaddr = df.at[row_idx, "kaptAddr"]
-                self.s_log.emit(
-                    f"    [{ai}/{len(pending)}] {kname} [{kcode}]  {kaddr[:30] if kaddr else '주소없음'}", "data")
+                self.s_log.emit(f"    [{ai}/{len(pending)}] {kname} [{kcode}]  {kaddr[:30] if kaddr else '주소없음'}", "data")
 
             if changed:
                 _save_coord_last(path, df)
                 self.s_log.emit(f"  ✅ {path.name} 저장 완료", "ok")
 
-        if self._stop:
-            self._finish()
-            return
-
-        # ══════════════════════════════════════════════════════════
-        #  Phase 3: 좌표 추가
-        # ══════════════════════════════════════════════════════════
+    # ── Phase 3: 좌표 추가 ───────────────────────────────────────
+    def _phase3(self):
         self.s_phase.emit(3, "Phase 3  좌표 추가")
         self.s_log.emit("══ Phase 3: 좌표 추가 ══════════════════════════", "header")
-
         csv_files = sorted(OUTPUT_DIR.glob("*_list_coord.csv"))
         total_f   = len(csv_files)
 
         for fi, path in enumerate(csv_files, 1):
-            if self._stop:
-                break
-
+            if self._stop: break
             df      = _read_csv(path)
             pending = _phase3_pending(df)
-
             self.s_prog1.emit(fi, total_f, path.name)
-
             if not pending:
-                self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — 좌표 완료 (skip)", "skip")
-                continue
+                self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — 좌표 완료 (skip)", "skip"); continue
 
-            self.s_log.emit(
-                f"  [{fi}/{total_f}] {path.name} — {len(pending)}행 처리 예정", "info")
-
-            if "위도" not in df.columns:
-                df["위도"] = ""
-            if "경도" not in df.columns:
-                df["경도"] = ""
+            self.s_log.emit(f"  [{fi}/{total_f}] {path.name} — {len(pending)}행 처리 예정", "info")
+            if "위도" not in df.columns: df["위도"] = ""
+            if "경도" not in df.columns: df["경도"] = ""
 
             changed = False
             for ai, row_idx in enumerate(pending, 1):
-                if self._stop:
-                    break
-
-                row_dict    = df.iloc[row_idx].to_dict()
+                if self._stop: break
+                row_dict = df.iloc[row_idx].to_dict()
                 lat, lng, kc = geocode(row_dict)
                 self.n_kakao += kc
                 self._emit_api()
                 self.s_prog2.emit(ai, len(pending))
-
                 df.at[row_idx, "위도"] = lat
                 df.at[row_idx, "경도"] = lng
                 changed = True
-
                 kname     = df.at[row_idx, "kaptName"]
                 coord_str = f"({lat[:8]}, {lng[:9]})" if lat else "좌표없음"
                 self.s_log.emit(f"    [{ai}/{len(pending)}] {kname}  {coord_str}", "data")
@@ -547,13 +554,78 @@ class CollectorWorker(QThread):
                 _save_coord_last(path, df)
                 self.s_log.emit(f"  ✅ {path.name} 저장 완료", "ok")
 
-        self._finish()
+    # ── Phase 4: R2 업로드 (gzip 압축 후 업로드) ─────────────────
+    def _phase4(self):
+        self.s_phase.emit(4, "Phase 4  R2 업로드")
+        self.s_log.emit("══ Phase 4: Cloudflare R2 업로드 ══════════════════", "header")
+        try:
+            # code5_map.json 갱신
+            pat = re.compile(r"(.+)_(\d{5})_list_coord\.csv$")
+            mapping = {}
+            for f in OUTPUT_DIR.glob("*_list_coord.csv"):
+                m = pat.search(f.name)
+                if m: mapping[m.group(2)] = f.name
+            map_path = OUTPUT_DIR / "code5_map.json"
+            with open(map_path, "w", encoding="utf-8") as fp:
+                json.dump(mapping, fp, ensure_ascii=False)
+            self.s_log.emit(f"  code5_map.json 갱신 완료 ({len(mapping)}개 항목)", "ok")
+
+            s3 = boto3.client("s3",
+                endpoint_url=R2_ENDPOINT,
+                aws_access_key_id=R2_ACCESS_KEY,
+                aws_secret_access_key=R2_SECRET_KEY,
+            )
+
+            self.s_log.emit("  R2 파일 목록 확인 중...", "info")
+            existing = {}
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=R2_BUCKET, Prefix="KaptList/"):
+                for obj in page.get("Contents", []):
+                    existing[obj["Key"]] = obj["LastModified"]
+            self.s_log.emit(f"  R2 기존 파일: {len(existing):,}개", "info")
+
+            files = [f for f in sorted(OUTPUT_DIR.glob("*")) if f.is_file() and f.suffix != ".py"]
+            total_f = len(files)
+            uploaded = skipped = 0
+
+            for i, file_path in enumerate(files, 1):
+                if self._stop: break
+                # json은 그대로, csv는 gzip 압축해서 .csv.gz로 업로드
+                if file_path.suffix == ".csv":
+                    gz_key = f"KaptList/{file_path.stem}.csv.gz"
+                    local_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+                    if gz_key in existing and local_dt <= existing[gz_key]:
+                        skipped += 1; continue
+                    self.s_prog1.emit(i, total_f, file_path.name)
+                    with open(file_path, "rb") as f_in:
+                        compressed = gzip.compress(f_in.read())
+                    s3.put_object(Bucket=R2_BUCKET, Key=gz_key, Body=compressed,
+                        ContentType="application/gzip")
+                else:
+                    key = f"KaptList/{file_path.name}"
+                    local_dt = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+                    if key in existing and local_dt <= existing[key]:
+                        skipped += 1; continue
+                    self.s_prog1.emit(i, total_f, file_path.name)
+                    s3.upload_file(str(file_path), R2_BUCKET, key)
+
+                uploaded += 1
+                self.n_upload += 1
+                log_name = gz_key.split("/")[-1] if file_path.suffix == ".csv" else file_path.name
+                self.s_log.emit(f"  ↑ {log_name}", "data")
+
+            self.s_log.emit(f"  ✅ 업로드 완료  (신규/갱신: {uploaded}개 / 건너뜀: {skipped}개)", "ok")
+
+        except Exception as e:
+            self.s_log.emit(f"  ❌ R2 업로드 오류: {e}", "warn")
+            logger.error(f"R2 업로드 오류: {e}\n{traceback.format_exc()}")
 
     def _finish(self):
         summary = (
-            f"수집 종료  │  ① 목록 API {self.n_list:,}회"
-            f"  │  ② 기본정보 API {self.n_bass:,}회"
+            f"완료  │  ① 목록 {self.n_list:,}회"
+            f"  │  ② 기본정보 {self.n_bass:,}회"
             f"  │  ③ 카카오 {self.n_kakao:,}회"
+            f"  │  ④ R2 업로드 {self.n_upload:,}개"
         )
         self.s_done.emit(summary)
 
@@ -570,7 +642,7 @@ LEVEL_COLOR = {
     "data":   "#8fa8c0",
 }
 
-PHASE_COLOR = ["", "#4c7cf3", "#f59f00", "#40c057"]  # phase 1/2/3 색상
+PHASE_COLOR = ["", "#4c7cf3", "#f59f00", "#40c057", "#cc5de8"]  # phase 1/2/3/4 색상
 
 
 class ApiGauge(QFrame):
@@ -711,15 +783,37 @@ class MainWindow(QMainWindow):
 
         prog_v.addStretch()
 
-        btn_row = QHBoxLayout()
-        self.btn_start = self._btn("▶  시작", "#2b5ce6", "#1a45c0")
+        # 단계별 버튼
+        step_row = QHBoxLayout()
+        step_row.setSpacing(4)
+        self.btn_p1   = self._btn("Phase1", "#1864ab", "#1451a0")
+        self.btn_p2   = self._btn("Phase2", "#5f3dc4", "#4c309e")
+        self.btn_p3   = self._btn("Phase3", "#2b8a3e", "#236e31")
+        self.btn_r2   = self._btn("R2 업로드", "#862e9c", "#6d2580")
+        for b in (self.btn_p1, self.btn_p2, self.btn_p3, self.btn_r2):
+            b.setFixedHeight(32)
+            step_row.addWidget(b)
+        prog_v.addLayout(step_row)
+
+        # 일괄 버튼
+        bulk_row = QHBoxLayout()
+        bulk_row.setSpacing(4)
+        self.btn_p123  = self._btn("▶  Phase1+2+3", "#2b5ce6", "#1a45c0")
+        self.btn_all   = self._btn("▶  전체실행", "#0b7285", "#09636e")
         self.btn_stop  = self._btn("■  중지", "#c92a2a", "#a61e1e")
         self.btn_stop.setEnabled(False)
-        self.btn_start.clicked.connect(self._on_start)
+        bulk_row.addWidget(self.btn_p123)
+        bulk_row.addWidget(self.btn_all)
+        bulk_row.addWidget(self.btn_stop)
+        prog_v.addLayout(bulk_row)
+
+        self.btn_p1.clicked.connect(lambda: self._on_start(1, 1))
+        self.btn_p2.clicked.connect(lambda: self._on_start(2, 2))
+        self.btn_p3.clicked.connect(lambda: self._on_start(3, 3))
+        self.btn_r2.clicked.connect(lambda: self._on_start(4, 4))
+        self.btn_p123.clicked.connect(lambda: self._on_start(1, 3))
+        self.btn_all.clicked.connect(lambda: self._on_start(1, 4))
         self.btn_stop.clicked.connect(self._on_stop)
-        btn_row.addWidget(self.btn_start)
-        btn_row.addWidget(self.btn_stop)
-        prog_v.addLayout(btn_row)
         mid.addWidget(prog_gb, 5)
 
         # 로그
@@ -793,14 +887,22 @@ class MainWindow(QMainWindow):
             logger.error(f"법정동코드 로드 실패: {e}\n{traceback.format_exc()}")
 
     # ── 버튼 이벤트 ───────────────────────────────────────────────
-    def _on_start(self):
-        if not self.regions:
+    def _set_btns_enabled(self, enabled: bool):
+        for b in (self.btn_p1, self.btn_p2, self.btn_p3, self.btn_r2,
+                  self.btn_p123, self.btn_all):
+            b.setEnabled(enabled)
+        self.btn_stop.setEnabled(not enabled)
+
+    def _on_start(self, start_phase: int = 1, end_phase: int = 4):
+        if not self.regions and start_phase < 4:
             return
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-        self._log("▶  수집을 시작합니다. (Phase 1 → 2 → 3 순서)", "ok")
-        self.worker = CollectorWorker(self.regions)
+        self._set_btns_enabled(False)
+        labels = {1:"Phase1", 2:"Phase2", 3:"Phase3", 4:"R2업로드"}
+        rng = " → ".join(labels[p] for p in range(start_phase, end_phase + 1))
+        self._log(f"▶  {rng} 시작", "ok")
+        self.worker = CollectorWorker(self.regions, start_phase, end_phase)
         self.worker.s_log.connect(self._log)
+        self.worker.s_r2log.connect(self._log)
         self.worker.s_phase.connect(self._on_phase)
         self.worker.s_prog1.connect(self._on_prog1)
         self.worker.s_prog2.connect(self._on_prog2)
@@ -837,10 +939,11 @@ class MainWindow(QMainWindow):
             1: "지역별 아파트 목록 수집 중",
             2: "단지별 기본정보 API 호출 중",
             3: "주소 → 카카오 좌표 변환 중",
+            4: "Cloudflare R2 업로드 중",
         }
         self.lbl_p2_hd.setText(phase_hints.get(num, "—"))
         # 하단 바 색상 업데이트
-        bar2_colors = {1: "#4c7cf3", 2: "#f59f00", 3: "#40c057"}
+        bar2_colors = {1: "#4c7cf3", 2: "#f59f00", 3: "#40c057", 4: "#cc5de8"}
         c = bar2_colors.get(num, "#4c7cf3")
         h = 12
         self.bar2.setStyleSheet(
@@ -873,8 +976,7 @@ class MainWindow(QMainWindow):
         self.lbl_phase.setStyleSheet(
             "color:#69db7c; background:#1a2040;"
             "border-radius:6px; padding:4px 10px; font-weight:bold; font-size:12px;")
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
+        self._set_btns_enabled(True)
         self.worker = None
 
     def closeEvent(self, event):

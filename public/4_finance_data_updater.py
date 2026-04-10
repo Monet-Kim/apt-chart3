@@ -4,10 +4,12 @@
 # 생성 파일: finance_{TICKER}_index.json + finance_{TICKER}_{YEAR}.csv
 # R2 폴더: /finance/
 
-import os, glob, re, json, time
-from datetime import datetime, timedelta
+import os, glob, re, json, gzip, logging, sys, time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import boto3
+from botocore.exceptions import ClientError
 import requests
 import pandas as pd
 import yfinance as yf
@@ -20,6 +22,14 @@ FRED_API_KEY = "090afc86298ebca8d11069b5045eed48"  # FRED API 키
 
 BASE_DIR = Path(__file__).parent / "finance_data"
 BASE_DIR.mkdir(exist_ok=True)
+
+LOG_DIR = Path(__file__).parent / "logs"
+
+R2_ACCESS_KEY = "71e270652969acf7a661d46404a196c6"
+R2_SECRET_KEY = "e0bdd25cd87d66f24a08e7d98387196fa2316bec40d8fe3b0426aa308fa609d4"
+R2_ENDPOINT   = "https://485ad5b19488023956187106c5f363d2.r2.cloudflarestorage.com"
+R2_BUCKET     = "apt-chart-data"
+R2_FOLDER     = "finance_data"
 
 # yfinance ticker 목록
 YFINANCE_TICKERS = {
@@ -560,8 +570,389 @@ def run():
     print(f"전체 완료: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"저장 위치: {BASE_DIR}")
     print("=" * 50)
-    print("\nR2 업로드: finance_data/ 폴더 전체를 R2 /finance/ 에 업로드하세요.")
+    print("\nR2 업로드: R2업로드 버튼을 눌러 finance_data/ 폴더를 R2에 업로드하세요.")
 
 
+# ════════════════════════════════════════════════════════════════
+#  PyQt6 GUI
+# ════════════════════════════════════════════════════════════════
+from PyQt6.QtWidgets import (
+    QApplication, QFrame, QHBoxLayout, QLabel,
+    QMainWindow, QPushButton,
+    QTextEdit, QVBoxLayout, QWidget,
+)
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtGui import QTextCursor
+
+# ── 다크 테마 색상 ──
+C = {
+    "bg":       "#0f1117",
+    "panel":    "#1a1d27",
+    "border":   "#2a2d3a",
+    "accent":   "#4f8ef7",
+    "ok":       "#3ec97a",
+    "warn":     "#f5a623",
+    "error":    "#f05e5e",
+    "skip":     "#5a6080",
+    "header":   "#c5ceff",
+    "text":     "#d0d5f0",
+    "dim":      "#6b7094",
+    "gauge_bg": "#1e2235",
+}
+
+LOG_COLORS = {
+    "info":   C["text"],
+    "ok":     C["ok"],
+    "warn":   C["warn"],
+    "error":  C["error"],
+    "skip":   C["skip"],
+    "header": C["header"],
+}
+
+
+def _setup_logger() -> logging.Logger:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / f"finance_{ts}.log"
+    logger = logging.getLogger(f"finance_{ts}")
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(fh)
+    return logger
+
+
+class _StdoutCatcher:
+    """print() 출력을 Qt 시그널로 리디렉션"""
+    def __init__(self, callback):
+        self._cb = callback
+
+    def write(self, text):
+        if text.strip():
+            self._cb(text.rstrip(), "info")
+
+    def flush(self):
+        pass
+
+
+class CollectorWorker(QThread):
+    sig_log      = pyqtSignal(str, str)   # (message, level)
+    sig_finished = pyqtSignal(str)        # 완료 메시지
+
+    def __init__(self, start_step: int, end_step: int):
+        super().__init__()
+        self.start_step = start_step   # 1=수집, 2=R2업로드
+        self.end_step   = end_step
+        self._stop = False
+        self._logger = _setup_logger()
+
+    def stop(self):
+        self._stop = True
+
+    def _log(self, msg: str, level: str = "info"):
+        self.sig_log.emit(msg, level)
+        self._logger.info(f"[{level}] {msg}")
+
+    def _step1(self):
+        """금융 데이터 수집 (기존 run() 함수 실행, stdout 캡처)"""
+        self._log("═" * 50, "header")
+        self._log("  📈 금융 데이터 수집 시작", "header")
+        self._log("═" * 50, "header")
+
+        old_stdout = sys.stdout
+        sys.stdout = _StdoutCatcher(self._log)
+        try:
+            run()
+        except Exception as e:
+            self._log(f"  ❌ 수집 오류: {e}", "error")
+            self._logger.exception("step1 error")
+        finally:
+            sys.stdout = old_stdout
+
+    def _step2(self):
+        """finance_data/*.csv + *.json → R2 gzip 업로드 (변경된 파일만)"""
+        self._log("═" * 50, "header")
+        self._log("  ☁ R2 업로드 시작 (변경된 파일만)", "header")
+        self._log("═" * 50, "header")
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+        )
+
+        files = list(BASE_DIR.glob("*.csv")) + list(BASE_DIR.glob("*.json"))
+        self._log(f"  📂 {R2_FOLDER}: {len(files)}개 파일 확인 중...", "info")
+        uploaded = skipped = errors = 0
+
+        for local_path in files:
+            if self._stop:
+                break
+
+            ext = local_path.suffix
+            r2_key = f"{R2_FOLDER}/{local_path.name}{'.gz' if ext == '.csv' else ''}"
+
+            r2_mtime = None
+            try:
+                head = s3.head_object(Bucket=R2_BUCKET, Key=r2_key)
+                r2_mtime = head["LastModified"].replace(tzinfo=timezone.utc).timestamp()
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                    self._log(f"  ⚠ head_object 오류 {local_path.name}: {e}", "warn")
+
+            local_mtime = local_path.stat().st_mtime
+            if r2_mtime is not None and local_mtime <= r2_mtime:
+                self._log(f"  ⏭ skip (변경 없음): {local_path.name}", "skip")
+                skipped += 1
+                continue
+
+            try:
+                with open(local_path, "rb") as f_in:
+                    raw = f_in.read()
+
+                if ext == ".csv":
+                    body = gzip.compress(raw)
+                    ct, ce = "text/csv", "gzip"
+                else:
+                    body = raw
+                    ct, ce = "application/json", None
+
+                kwargs = dict(Bucket=R2_BUCKET, Key=r2_key, Body=body, ContentType=ct)
+                if ce:
+                    kwargs["ContentEncoding"] = ce
+                s3.put_object(**kwargs)
+
+                self._log(f"  ✅ 업로드: {r2_key}  ({len(body):,} bytes)", "ok")
+                self._logger.info(f"uploaded {r2_key} ({len(body)} bytes)")
+                uploaded += 1
+            except Exception as e:
+                self._log(f"  ❌ 업로드 실패 {local_path.name}: {e}", "error")
+                self._logger.error(f"upload failed {local_path.name}: {e}")
+                errors += 1
+
+        self._log(
+            f"\n  R2 업로드 완료 — 업로드: {uploaded}개 / 스킵: {skipped}개 / 오류: {errors}개", "ok"
+        )
+
+    def run(self):
+        if self.start_step <= 1 <= self.end_step:
+            self._step1()
+
+        if not self._stop and self.start_step <= 2 <= self.end_step:
+            self._step2()
+
+        if self._stop:
+            self.sig_finished.emit("중단됨")
+        else:
+            self.sig_finished.emit("완료 ✅")
+
+
+# ── 로그 위젯 ──
+class ColorLog(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setStyleSheet(f"""
+            QTextEdit {{
+                background: {C['bg']};
+                color: {C['text']};
+                border: 1px solid {C['border']};
+                border-radius: 8px;
+                padding: 10px;
+                font-family: 'D2Coding', 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+            }}
+        """)
+
+    def append_colored(self, text: str, level: str = "info"):
+        color = LOG_COLORS.get(level, C["text"])
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.setTextCursor(cursor)
+        self.insertHtml(
+            f'<span style="color:{color};">'
+            f'{text.replace("<","&lt;").replace(">","&gt;").replace(chr(10),"<br>")}'
+            f'</span><br>'
+        )
+        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+
+
+# ── 메인 윈도우 ──
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("📈 금융 데이터 수집기")
+        self.setMinimumSize(800, 600)
+        self.resize(900, 680)
+        self._worker: CollectorWorker | None = None
+        self._apply_style()
+        self._build_ui()
+
+    def _apply_style(self):
+        self.setStyleSheet(f"""
+            QMainWindow, QWidget {{
+                background: {C['bg']};
+                color: {C['text']};
+                font-family: '맑은 고딕', 'Noto Sans KR', sans-serif;
+            }}
+            QPushButton {{
+                border-radius: 8px;
+                font-weight: 700;
+                font-size: 13px;
+                padding: 9px 20px;
+            }}
+            QPushButton#btn_collect {{
+                background: {C['accent']};
+                color: white;
+                border: none;
+            }}
+            QPushButton#btn_collect:hover {{ background: #6fa8ff; }}
+            QPushButton#btn_r2 {{
+                background: {C['ok']};
+                color: white;
+                border: none;
+            }}
+            QPushButton#btn_r2:hover {{ background: #5de08f; }}
+            QPushButton#btn_all {{
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 {C['accent']}, stop:1 {C['ok']});
+                color: white;
+                border: none;
+            }}
+            QPushButton#btn_all:hover {{ opacity:0.85; }}
+            QPushButton#btn_stop {{
+                background: {C['error']}22;
+                color: {C['error']};
+                border: 1px solid {C['error']}66;
+            }}
+            QPushButton#btn_stop:hover {{ background: {C['error']}44; }}
+            QPushButton:disabled {{ opacity: 0.4; }}
+            QLabel {{ color: {C['text']}; }}
+            QScrollBar:vertical {{
+                background: {C['panel']};
+                width: 6px;
+                border-radius: 3px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {C['border']};
+                border-radius: 3px;
+                min-height: 30px;
+            }}
+        """)
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(12)
+
+        # 헤더
+        header = QHBoxLayout()
+        title = QLabel("📈  금융 데이터 수집기")
+        title.setStyleSheet(f"font-size:18px; font-weight:800; color:{C['header']};")
+        sub = QLabel("yfinance · 업비트 · 한국은행 ECOS · FRED → 주간 종가 CSV")
+        sub.setStyleSheet(f"font-size:11px; color:{C['dim']}; margin-top:3px;")
+        th = QVBoxLayout()
+        th.addWidget(title)
+        th.addWidget(sub)
+        header.addLayout(th)
+        root.addLayout(header)
+
+        # 구분선
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"border:none; border-top:1px solid {C['border']};")
+        root.addWidget(line)
+
+        # 버튼 영역
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        self.btn_collect = QPushButton("▶  수집")
+        self.btn_r2      = QPushButton("☁  R2업로드")
+        self.btn_all     = QPushButton("▶  전체실행 (수집+R2)")
+        self.btn_stop    = QPushButton("⏹  중지")
+        self.btn_collect.setObjectName("btn_collect")
+        self.btn_r2.setObjectName("btn_r2")
+        self.btn_all.setObjectName("btn_all")
+        self.btn_stop.setObjectName("btn_stop")
+        self.btn_collect.clicked.connect(lambda: self._start(1, 1))
+        self.btn_r2.clicked.connect(lambda: self._start(2, 2))
+        self.btn_all.clicked.connect(lambda: self._start(1, 2))
+        self.btn_stop.clicked.connect(self._stop)
+        self.btn_stop.setEnabled(False)
+        for b in (self.btn_collect, self.btn_r2, self.btn_all, self.btn_stop):
+            btn_row.addWidget(b)
+        root.addLayout(btn_row)
+
+        # 로그
+        self.log = ColorLog()
+        root.addWidget(self.log, 1)
+
+        # 초기 메시지
+        self.log.append_colored("금융 데이터 수집기가 준비됐습니다.", "ok")
+        self.log.append_colored(f"저장 경로: {BASE_DIR}", "info")
+        self.log.append_colored(f"R2 버킷: {R2_BUCKET} / {R2_FOLDER}  (.csv.gz 업로드)", "info")
+
+    def _all_step_btns(self):
+        return (self.btn_collect, self.btn_r2, self.btn_all)
+
+    def _start(self, start_step: int, end_step: int):
+        labels = {(1,1): "수집", (2,2): "R2 업로드", (1,2): "전체실행 (수집+R2)"}
+        self.log.clear()
+        self.log.append_colored(
+            f"{labels.get((start_step,end_step),'실행')} 시작  "
+            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]", "header"
+        )
+
+        self._worker = CollectorWorker(start_step, end_step)
+        self._worker.sig_log.connect(lambda msg, lv: self.log.append_colored(msg, lv))
+        self._worker.sig_finished.connect(self._on_finished)
+        self._worker.start()
+
+        for b in self._all_step_btns():
+            b.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+
+    def _stop(self):
+        if self._worker:
+            self._worker.stop()
+        self.log.append_colored("\n⏹ 중지 요청됨...", "warn")
+
+    def _on_finished(self, msg: str):
+        self.log.append_colored(f"\n{'='*48}", "header")
+        self.log.append_colored(f"  {msg}", "ok" if "완료" in msg else "warn")
+        self.log.append_colored(f"{'='*48}", "header")
+        for b in self._all_step_btns():
+            b.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+
+    def closeEvent(self, e):
+        if self._worker and self._worker.isRunning():
+            self._worker.stop()
+            self._worker.wait(3000)
+        e.accept()
+
+
+# ── 진입점 ──
 if __name__ == "__main__":
-    run()
+    from PyQt6.QtGui import QColor, QPalette
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window,          QColor(C["bg"]))
+    palette.setColor(QPalette.ColorRole.WindowText,      QColor(C["text"]))
+    palette.setColor(QPalette.ColorRole.Base,            QColor(C["panel"]))
+    palette.setColor(QPalette.ColorRole.AlternateBase,   QColor(C["border"]))
+    palette.setColor(QPalette.ColorRole.Text,            QColor(C["text"]))
+    palette.setColor(QPalette.ColorRole.Button,          QColor(C["panel"]))
+    palette.setColor(QPalette.ColorRole.ButtonText,      QColor(C["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight,       QColor(C["accent"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    app.setPalette(palette)
+
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())

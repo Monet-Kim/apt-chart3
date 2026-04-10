@@ -1,0 +1,5 @@
+﻿kaptCode,kaptName,codeMgr,kaptMgrCnt,kaptCcompany,codeSec,kaptdScnt,kaptdSecCom,codeClean,kaptdClcnt,codeGarbage,codeDisinf,kaptdDcnt,disposalType,codeStr,kaptdEcapa,codeEcon,codeEmgr,codeFalarm,codeWsupply,codeElev,kaptdEcnt,kaptdPcnt,kaptdPcntu,codeNet,kaptdCccnt,welfareFacility,kaptdWtimebus,subwayLine,subwayStation,kaptdWtimesub,convenientFacility,educationFacility,groundElChargerCnt,undergroundElChargerCnt,useYn
+A56780001,군상주공연립1차,위탁관리,2,대한주택관리(주),위탁관리,2,,위탁관리,0,,기타,,,철근콘크리트구조,196,기타,위탁선임,P형,부스타방식,,0,196,0,,19,"관리사무소, 노인정, 주민공동시설, 어린이놀이터",5~10분이내,,,,관공서() 공원(월랑공원),중학교() 고등학교(),0,0,Y
+A56780002,진안고향마을,위탁관리,2,대한주택관리(주),자치관리(직영),2,,자치관리(직영),2,차량수거방식,자치관리,3,"도포식,분무식",철근콘크리트구조,800,단일계약,위탁선임,P형,부스타방식,위탁관리,12,248,0,무,39,,5~10분이내,,,,,,5,0,Y
+A56780502,진안군상주공2차,위탁관리,3,대한주택관리(주),위탁관리,2,대한주택관리(주),자치관리,2,,자치관리,,,철근콘크리트구조,150,기타,위탁선임,기타,부스타방식,,0,150,0,무,12,"관리사무소, 노인정, 어린이놀이터, 자전거보관소",5분이내,,,,,,1,0,Y
+A56780601,진안대아월랑,위탁관리,1,대한주택관리(주),위탁관리,2,대한주택관리(주),위탁관리,10,차량수거방식,위탁관리,1,,철근콘크리트구조,185,기타,위탁선임,P형,고가수조식,위탁관리,4,52,41,무,23,"관리사무소, 노인정, 어린이놀이터",5~10분이내,,,,관공서(진안행정복지센터),초등학교(진안초교) 고등학교(진안제일고),2,0,Y

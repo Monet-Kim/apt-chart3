@@ -1,0 +1,5 @@
+﻿kaptCode,kaptName,codeMgr,kaptMgrCnt,kaptCcompany,codeSec,kaptdScnt,kaptdSecCom,codeClean,kaptdClcnt,codeGarbage,codeDisinf,kaptdDcnt,disposalType,codeStr,kaptdEcapa,codeEcon,codeEmgr,codeFalarm,codeWsupply,codeElev,kaptdEcnt,kaptdPcnt,kaptdPcntu,codeNet,kaptdCccnt,welfareFacility,kaptdWtimebus,subwayLine,subwayStation,kaptdWtimesub,convenientFacility,educationFacility,groundElChargerCnt,undergroundElChargerCnt,useYn
+A10022346,LH천년나무 도동,위탁관리,0,주택관리공단(주),,,,자치관리,0,,자치관리,,,철골철근콘크리트구조,321,단일계약,위탁선임,기타,부스타방식,위탁관리,6,56,0,무,20,,5분이내,,,,,,1,0,Y
+A10022343,저동휴먼시아,위탁관리,,주택관리공단(주),,,,,,,,,,,,,,,,,0,,,,,,5분이내,,,,,,0,0,Y
+A10022345,LH천년나무 남서,위탁관리,,주택관리공단(주),,,,,,,,,,,,,,,,,0,,,,,,10~15분이내,,,,,,0,0,Y
+A10022342,천부LH천년나무,위탁관리,4,주택관리공단(주),,,,자치관리,0,,자치관리,,,철골철근콘크리트구조,110,단일계약,위탁선임,P형,부스타방식,위탁관리,1,12,0,무,8,,5~10분이내,,,,,,0,0,Y

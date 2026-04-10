@@ -4,7 +4,19 @@
       "Bash(npm run:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "WebFetch(domain:pub-8c65c427a291446c9384665be9201bea.r2.dev)",
+      "Bash(gh run:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(npm start:*)",
+      "Bash(python -c ':*)",
+      "Bash(grep -n \"#[0-9a-fA-F]\\\\{3,6\\\\}\" \"d:/apt-chart3/src/pages/LeftPanel.js\")",
+      "Bash(wrangler --version)",
+      "Bash(npx wrangler:*)",
+      "Bash(wrangler r2:*)",
+      "Bash(ls public/KaptDetail/*.csv)",
+      "Bash(git checkout:*)",
+      "Bash(xargs head:*)"
     ]
   }
 }

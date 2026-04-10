@@ -7,13 +7,16 @@ MP 부동산 데이터 수집기
 - 버그 수정 완료
 """
 
-import os, re, glob, json, time, ssl, sys
+import os, re, glob, json, gzip, time, ssl, sys, logging
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import boto3
+from botocore.exceptions import ClientError
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -38,6 +41,26 @@ BASE_DIR      = Path(os.path.abspath(__file__)).parent  # = public/
 KAPT_LIST_DIR = BASE_DIR / "KaptList"
 RDATA_DIR     = BASE_DIR / "Rdata"
 PDATA_DIR     = BASE_DIR / "Pdata"
+LOG_DIR       = BASE_DIR / "logs"
+
+R2_ACCESS_KEY = "71e270652969acf7a661d46404a196c6"
+R2_SECRET_KEY = "e0bdd25cd87d66f24a08e7d98387196fa2316bec40d8fe3b0426aa308fa609d4"
+R2_ENDPOINT   = "https://485ad5b19488023956187106c5f363d2.r2.cloudflarestorage.com"
+R2_BUCKET     = "apt-chart-data"
+
+# ─────────────────────────────────────────────
+# 파일 로거
+# ─────────────────────────────────────────────
+def _setup_logger() -> logging.Logger:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / f"rp_{ts}.log"
+    logger = logging.getLogger(f"rp_{ts}")
+    logger.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(fh)
+    return logger
 
 # ─────────────────────────────────────────────
 # TLS 세션 (분양권 P용)
@@ -370,13 +393,14 @@ class WorkerThread(QThread):
 
     def __init__(self, mode: str, skip_hours: int, start_ym_override: int = None):
         super().__init__()
-        self.mode = mode          # "R" | "P" | "RP"
+        self.mode = mode          # "R" | "P" | "RP" | "R2" | "ALL"
         self.skip_hours = skip_hours
         self.start_ym_override = start_ym_override
         self._stop = False
         self._global_req = 0
         self._mutex = QMutex()
         self._elapsed = QElapsedTimer()
+        self._logger = _setup_logger()
 
     def stop(self):
         self._stop = True
@@ -490,24 +514,122 @@ class WorkerThread(QThread):
 
             time.sleep(0.1)
 
+    def _r2_upload(self):
+        """Rdata/*.csv 와 Pdata/*.csv 를 R2에 gzip 압축 업로드 (변경된 파일만)"""
+        self.sig_log.emit("═" * 50, "header")
+        self.sig_log.emit("  ☁ R2 업로드 시작 (변경된 파일만)", "header")
+        self.sig_log.emit("═" * 50, "header")
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+        )
+
+        folder_pairs = [
+            (RDATA_DIR, "Rdata"),
+            (PDATA_DIR, "Pdata"),
+        ]
+
+        uploaded = skipped = errors = 0
+
+        for local_dir, r2_folder in folder_pairs:
+            if not local_dir.exists():
+                self.sig_log.emit(f"  ⚠ 폴더 없음: {local_dir}", "warn")
+                continue
+
+            csv_files_list = list(local_dir.glob("*.csv")) + list(local_dir.glob("*.json"))
+            self.sig_log.emit(f"  📂 {r2_folder}: {len(csv_files_list)}개 파일 확인 중...", "info")
+
+            for local_path in csv_files_list:
+                if self._stop:
+                    break
+
+                ext = local_path.suffix  # .csv or .json
+                r2_key = f"{r2_folder}/{local_path.name}{'.gz' if ext == '.csv' else ''}"
+
+                # R2 수정 시각 조회
+                r2_mtime = None
+                try:
+                    head = s3.head_object(Bucket=R2_BUCKET, Key=r2_key)
+                    r2_mtime = head["LastModified"].replace(tzinfo=timezone.utc).timestamp()
+                except ClientError as e:
+                    if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                        self.sig_log.emit(f"  ⚠ head_object 오류 {local_path.name}: {e}", "warn")
+
+                local_mtime = local_path.stat().st_mtime
+                if r2_mtime is not None and local_mtime <= r2_mtime:
+                    self.sig_log.emit(f"  ⏭ skip (변경 없음): {local_path.name}", "skip")
+                    self._logger.info(f"skip {local_path.name}")
+                    skipped += 1
+                    continue
+
+                try:
+                    with open(local_path, "rb") as f_in:
+                        raw = f_in.read()
+
+                    if ext == ".csv":
+                        body = gzip.compress(raw)
+                        ct, ce = "text/csv", "gzip"
+                    else:
+                        body = raw
+                        ct, ce = "application/json", None
+
+                    kwargs = dict(
+                        Bucket=R2_BUCKET,
+                        Key=r2_key,
+                        Body=body,
+                        ContentType=ct,
+                    )
+                    if ce:
+                        kwargs["ContentEncoding"] = ce
+
+                    s3.put_object(**kwargs)
+                    self.sig_log.emit(f"  ✅ 업로드: {r2_key}  ({len(body):,} bytes)", "ok")
+                    self._logger.info(f"uploaded {r2_key} ({len(body)} bytes)")
+                    uploaded += 1
+                except Exception as e:
+                    self.sig_log.emit(f"  ❌ 업로드 실패 {local_path.name}: {e}", "error")
+                    self._logger.error(f"upload failed {local_path.name}: {e}")
+                    errors += 1
+
+            if self._stop:
+                break
+
+        self.sig_log.emit(f"\n  R2 업로드 완료 — 업로드: {uploaded}개 / 스킵: {skipped}개 / 오류: {errors}개", "ok")
+        self._logger.info(f"R2 upload done: {uploaded} uploaded, {skipped} skipped, {errors} errors")
+
     def run(self):
         csv_files = list_csv_files()
+
+        if self.mode == "R2":
+            self._r2_upload()
+            if self._stop:
+                self.sig_finished.emit("중단됨")
+            else:
+                self.sig_finished.emit("R2 업로드 완료 ✅")
+            return
+
         if not csv_files:
             self.sig_log.emit(f"⚠ KaptList 폴더에 *_list_coord.csv 파일이 없습니다.\n   경로: {KAPT_LIST_DIR}", "warn")
             self.sig_finished.emit("파일 없음")
             return
 
-        if self.mode in ("R", "RP"):
+        if self.mode in ("R", "RP", "ALL"):
             self.sig_log.emit("═" * 50, "header")
             self.sig_log.emit("  🏠 실거래(R) 데이터 수집 시작", "header")
             self.sig_log.emit("═" * 50, "header")
             self._collect("R", csv_files, 0)
 
-        if not self._stop and self.mode in ("P", "RP"):
+        if not self._stop and self.mode in ("P", "RP", "ALL"):
             self.sig_log.emit("═" * 50, "header")
             self.sig_log.emit("  📋 분양권(P) 데이터 수집 시작", "header")
             self.sig_log.emit("═" * 50, "header")
             self._collect("P", csv_files, 1)
+
+        if not self._stop and self.mode == "ALL":
+            self._r2_upload()
 
         if self._stop:
             self.sig_finished.emit("중단됨")
@@ -713,6 +835,19 @@ class MainWindow(QMainWindow):
                 border: none;
             }}
             QPushButton#start_rp:hover {{ opacity:0.85; }}
+            QPushButton#start_r2 {{
+                background: {C['ok']};
+                color: white;
+                border: none;
+            }}
+            QPushButton#start_r2:hover {{ background: #5de08f; }}
+            QPushButton#start_all {{
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 {C['r_color']}, stop:0.5 {C['p_color']}, stop:1 {C['ok']});
+                color: white;
+                border: none;
+            }}
+            QPushButton#start_all:hover {{ opacity:0.85; }}
             QPushButton#stop_btn {{
                 background: {C['error']}22;
                 color: {C['error']};
@@ -845,28 +980,43 @@ class MainWindow(QMainWindow):
         root.addWidget(api_card)
 
         # ── 버튼 영역 ──
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        btn_area = QVBoxLayout()
+        btn_area.setSpacing(8)
 
-        self.btn_r  = QPushButton("▶  실거래(R) 수집")
-        self.btn_p  = QPushButton("▶  분양권(P) 수집")
-        self.btn_rp = QPushButton("▶  R + P 통합 수집")
-        self.btn_stop = QPushButton("⏹  중지")
-
+        # 1행: 개별 단계 버튼
+        btn_row1 = QHBoxLayout()
+        btn_row1.setSpacing(10)
+        self.btn_r    = QPushButton("▶  R수집")
+        self.btn_p    = QPushButton("▶  P수집")
+        self.btn_r2   = QPushButton("☁  R2업로드")
         self.btn_r.setObjectName("start_r")
         self.btn_p.setObjectName("start_p")
-        self.btn_rp.setObjectName("start_rp")
-        self.btn_stop.setObjectName("stop_btn")
-
+        self.btn_r2.setObjectName("start_r2")
         self.btn_r.clicked.connect(lambda: self._start("R"))
         self.btn_p.clicked.connect(lambda: self._start("P"))
-        self.btn_rp.clicked.connect(lambda: self._start("RP"))
-        self.btn_stop.clicked.connect(self._stop)
+        self.btn_r2.clicked.connect(lambda: self._start("R2"))
+        for b in (self.btn_r, self.btn_p, self.btn_r2):
+            btn_row1.addWidget(b)
+        btn_area.addLayout(btn_row1)
 
+        # 2행: 일괄 버튼 + 중지
+        btn_row2 = QHBoxLayout()
+        btn_row2.setSpacing(10)
+        self.btn_rp   = QPushButton("▶  R+P 일괄수집")
+        self.btn_all  = QPushButton("▶  전체실행 (R+P+R2)")
+        self.btn_stop = QPushButton("⏹  중지")
+        self.btn_rp.setObjectName("start_rp")
+        self.btn_all.setObjectName("start_all")
+        self.btn_stop.setObjectName("stop_btn")
+        self.btn_rp.clicked.connect(lambda: self._start("RP"))
+        self.btn_all.clicked.connect(lambda: self._start("ALL"))
+        self.btn_stop.clicked.connect(self._stop)
         self.btn_stop.setEnabled(False)
-        for b in (self.btn_r, self.btn_p, self.btn_rp, self.btn_stop):
-            btn_row.addWidget(b)
-        root.addLayout(btn_row)
+        for b in (self.btn_rp, self.btn_all, self.btn_stop):
+            btn_row2.addWidget(b)
+        btn_area.addLayout(btn_row2)
+
+        root.addLayout(btn_area)
 
         # ── 로그 ──
         self.log = ColorLog()
@@ -883,6 +1033,7 @@ class MainWindow(QMainWindow):
         self.log.append_colored(f"Rdata 저장 경로: {RDATA_DIR}", "info")
         self.log.append_colored(f"Pdata 저장 경로: {PDATA_DIR}", "info")
         self.log.append_colored(f"API 일일 한도: {API_LIMIT:,}회 / R 시작연월 기본값: 2006년 1월", "info")
+        self.log.append_colored(f"R2 버킷: {R2_BUCKET}  (Rdata/, Pdata/ 폴더에 .csv.gz 업로드)", "info")
 
     # ── 타이머 tick ──
     def _tick(self):
@@ -892,31 +1043,39 @@ class MainWindow(QMainWindow):
             m, s   = divmod(rem, 60)
             self.lbl_time.setText(f"{h:02d}:{m:02d}:{s:02d}")
 
+    def _all_step_btns(self):
+        return (self.btn_r, self.btn_p, self.btn_r2, self.btn_rp, self.btn_all)
+
     # ── 수집 시작 ──
     def _start(self, mode: str):
-        csv_files = list_csv_files()
-        if not csv_files:
-            self.log.append_colored(f"⚠ KaptList 폴더에 *_list_coord.csv 파일이 없습니다.\n   경로: {KAPT_LIST_DIR}", "warn")
-            return
+        if mode != "R2":
+            csv_files = list_csv_files()
+            if not csv_files:
+                self.log.append_colored(f"⚠ KaptList 폴더에 *_list_coord.csv 파일이 없습니다.\n   경로: {KAPT_LIST_DIR}", "warn")
+                return
+            total = len(csv_files)
+        else:
+            total = 0
 
-        total = len(csv_files)
-        self.card_total.set_value(str(total))
+        self.card_total.set_value(str(total) if total else "—")
         self.card_done.set_value("0")
         self.card_skip.set_value("0")
         self.card_eta.set_value("—")
         self._done_cnt = 0
         self._skip_cnt = 0
-        self._total_cnt = total * (2 if mode == "RP" else 1)
+        self._total_cnt = total * (2 if mode in ("RP", "ALL") else 1)
         self.progress_total.setValue(0)
         self.lbl_prog_pct.setText("0%")
 
+        mode_labels = {"R": "실거래(R) 수집", "P": "분양권(P) 수집", "RP": "R+P 일괄수집",
+                       "R2": "R2 업로드", "ALL": "전체실행 (R+P+R2)"}
         self.log.clear()
-        self.log.append_colored(f"{'R+P 통합' if mode=='RP' else ('실거래(R)' if mode=='R' else '분양권(P)')} 수집 시작  [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]", "header")
+        self.log.append_colored(f"{mode_labels.get(mode, mode)} 시작  [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]", "header")
 
         self._start_time = datetime.now()
         self._timer.start(1000)
 
-        skip_h = 24 if mode == "R" else 12
+        skip_h = 24 if mode in ("R", "ALL") else 12
 
         self._worker = WorkerThread(mode, skip_h)
         self._worker.sig_log.connect(self._on_log)
@@ -927,7 +1086,7 @@ class MainWindow(QMainWindow):
         self._worker.sig_eta.connect(self._on_eta)
         self._worker.start()
 
-        for b in (self.btn_r, self.btn_p, self.btn_rp):
+        for b in self._all_step_btns():
             b.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
@@ -985,7 +1144,7 @@ class MainWindow(QMainWindow):
         self.lbl_current.setText(msg)
         self.card_eta.set_value("완료", C["ok"])
 
-        for b in (self.btn_r, self.btn_p, self.btn_rp):
+        for b in self._all_step_btns():
             b.setEnabled(True)
         self.btn_stop.setEnabled(False)
 

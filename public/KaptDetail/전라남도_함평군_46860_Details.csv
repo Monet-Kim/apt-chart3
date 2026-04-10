@@ -1,0 +1,6 @@
+﻿kaptCode,kaptName,codeMgr,kaptMgrCnt,kaptCcompany,codeSec,kaptdScnt,kaptdSecCom,codeClean,kaptdClcnt,codeGarbage,codeDisinf,kaptdDcnt,disposalType,codeStr,kaptdEcapa,codeEcon,codeEmgr,codeFalarm,codeWsupply,codeElev,kaptdEcnt,kaptdPcnt,kaptdPcntu,codeNet,kaptdCccnt,welfareFacility,kaptdWtimebus,subwayLine,subwayStation,kaptdWtimesub,convenientFacility,educationFacility,groundElChargerCnt,undergroundElChargerCnt,useYn
+A10023700,함평 한국아델리움더퍼스트,위탁관리,1,성원산업개발(주),위탁관리,2,(주)성원산업개발,위탁관리,1,차량수거방식,자치관리,0,,철골철근콘크리트구조,800,종합계약,위탁선임,P형,부스타방식,위탁관리,7,171,0,유,44,"관리사무소, 노인정, 어린이놀이터, 자전거보관소",5~10분이내,,,,,,4,0,Y
+A10021317,함평 거송 라뷔랑 아파트,자치관리,,,,,,,,,,,,,,,,,,,0,,,,,,10~15분이내,,,,,,0,0,Y
+A52580301,함평주공,위탁관리,4,(유)대신종합개발,위탁관리,2,없음,위탁관리,2,음식물쓰레기종량제,위탁관리,2,기구부착식,철근콘크리트구조,650,단일계약,위탁선임,R형,부스타방식,위탁관리,8,211,0,무,31,,10~15분이내,,,,관공서(함평군청) 병원(함평성심병원) 공원(함평나비엑스포공원) 기타(함평시외버스터미널),"초등학교(함평초,기산초등학교) 중학교(함평여중,함평중) 고등학교(함평골프고,함평고등학교,함평여자고등학교)",6,0,Y
+A10020571,함평 엘리체시그니처아파트,위탁관리,2,현대아미스(주),위탁관리,,,,,,,,,철골철근콘크리트구조,1750,종합계약,상주선임,R형,부스타방식,위탁관리,8,84,227,유,99,"관리사무소, 노인정, 어린이놀이터, 커뮤니티공간, 자전거보관소",,,,,,,0,0,Y
+A10025805,함평향교1단지 아파트,위탁관리,1,정우산업(주),위탁관리,2,(주)송현,위탁관리,1,차량수거방식,위탁관리,2,독이식,철근콘크리트구조,180,기타,위탁선임,R형,부스타방식,위탁관리,3,107,0,무,31,"관리사무소, 노인정, 어린이놀이터",5분이내,,,,,,0,0,Y

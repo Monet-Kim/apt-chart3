@@ -392,7 +392,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [hotAreas, setHotAreas] = useState([]);
 
   // 스무딩 윈도우
-  const [smoothWindow, setSmoothWindow] = useState(3);
+  const [smoothWindow, setSmoothWindow] = useState(0);
 
   // X축 기간
   const [yearWindow, setYearWindow] = useState(5);

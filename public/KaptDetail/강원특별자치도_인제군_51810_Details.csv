@@ -1,0 +1,6 @@
+﻿kaptCode,kaptName,codeMgr,kaptMgrCnt,kaptCcompany,codeSec,kaptdScnt,kaptdSecCom,codeClean,kaptdClcnt,codeGarbage,codeDisinf,kaptdDcnt,disposalType,codeStr,kaptdEcapa,codeEcon,codeEmgr,codeFalarm,codeWsupply,codeElev,kaptdEcnt,kaptdPcnt,kaptdPcntu,codeNet,kaptdCccnt,welfareFacility,kaptdWtimebus,subwayLine,subwayStation,kaptdWtimesub,convenientFacility,educationFacility,groundElChargerCnt,undergroundElChargerCnt,useYn
+A25280601,내설악아파트,자치관리,4,,자치관리,4,,자치관리,1,차량수거방식,자치관리,1,,철근콘크리트구조,195,기타,위탁선임,P형,고가수조식,위탁관리,5,104,0,무,19,"관리사무소, 어린이놀이터, 자전거보관소",5~10분이내,,,,관공서(인제군청) 병원(인제종합) 대형상가(정컨카프라자) 공원() 기타(민족사박물관),초등학교(인제) 중학교(인제) 고등학교(인제종합),2,0,Y
+A10024991,라온프라이빗 아파트,위탁관리,7,삼양관리주식회사,,,,위탁관리,2,차량수거방식,위탁관리,3,"도포식,분무식,기구부착식",철근콘크리트구조,1500,종합계약,상주선임,GR형,부스타방식,위탁관리,9,221,132,유,80,"관리사무소, 노인정, 보육시설, 문고, 어린이놀이터, 휴게시설, 자전거보관소",15~20분이내,,,20분초과,,,13,0,Y
+A10024690,인제 양우내안애 아파트,자치관리,4,,자치관리,2,,자치관리,2,음식물쓰레기종량제,자치관리,,,철근콘크리트구조,1400,종합계약,상주선임,GR형,부스타방식,위탁관리,7,81,144,유,52,"관리사무소, 노인정, 주민공동시설, 어린이놀이터, 휴게시설, 자전거보관소",5분이내,,,,,,5,0,Y
+A10020998,인제라포레아파트,위탁관리,3,,,,,관리방식미정,0,,관리방식미정,,,철골철근콘크리트구조,759,단일계약,위탁선임,P형,부스타방식,위탁관리,4,17,91,무,24,"관리사무소, 문고, 어린이놀이터, 휴게시설, 자전거보관소",5~10분이내,,,,,,0,0,Y
+A10022112,신아아파트,자치관리(직영),1,,자치관리,,,자치관리(직영),1,차량수거방식,자치관리(직영),0,,철근콘크리트구조,400,단일계약,선정안함,P형,고가수조식,위탁관리(직영+위탁),2,84,0,무,17,"관리사무소, 노인정, 어린이놀이터, 자전거보관소",5~10분이내,,,,,,2,0,Y

@@ -1,14 +1,31 @@
 // src/pages/Mainmap.js
 import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { Map as KakaoMap, CustomOverlayMap } from 'react-kakao-maps-sdk';
+import { parseCSV } from '../utils/csvUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea,
   pickInitialArea, groupAreasToRep,
-  kaptListUrlByCoord, fetchKaptListRows,
 } from './services/aptData';
 
+const fileCache    = new Map();
+const geocodeCache = new Map(); // "lat2,lng2" → filename (역지오코딩 결과 캐시)
+let code5MapCache = null;
+const loadCode5Map = async () => {
+  if (code5MapCache) return code5MapCache;
+  try {
+    const r = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+    if (r.ok) code5MapCache = await r.json();
+  } catch { /* 로드 실패 시 null 유지 */ }
+  return code5MapCache;
+};
+
+const R2_BASE = process.env.NODE_ENV === 'production'
+  ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
+  : "";
+const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
+const enc = (s) => encodeURIComponent(s);
 // n×n 격자 샘플 포인트 (줌 레벨이 높을수록 뷰포트가 넓어 더 많이 필요)
 const makeGridPoints = (bbox, n = 3) => {
   const lats = Array.from({ length: n }, (_, i) =>
@@ -20,6 +37,58 @@ const makeGridPoints = (bbox, n = 3) => {
   return pts;
 };
 
+// 포인트 → CSV 파일명 (역지오코딩 결과 캐시 우선)
+const pointToFile = (pt) => {
+  const cacheKey = `${pt.lat.toFixed(2)},${pt.lng.toFixed(2)}`;
+  if (geocodeCache.has(cacheKey)) return Promise.resolve(geocodeCache.get(cacheKey));
+
+  return new Promise((resolve) => {
+    const geocoder = new window.kakao.maps.services.Geocoder();
+    geocoder.coord2RegionCode(pt.lng, pt.lat, async (res, status) => {
+      const fallback = `${R2_BASE}/KaptList/${enc(`서울특별시_송파구_11710_list_coord.csv`)}${CSV_SUFFIX}`;
+      if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
+        geocodeCache.set(cacheKey, fallback);
+        resolve(fallback);
+        return;
+      }
+      const b = res.find(r => r.region_type === 'B') || res[0];
+      const code5 = (b.code || '').slice(0, 5) || '11710';
+
+      const map = await loadCode5Map();
+      const filename = map?.[code5]
+        ? `${R2_BASE}/KaptList/${enc(map[code5])}${CSV_SUFFIX}`
+        : `${R2_BASE}/KaptList/${enc(`${b.region_1depth_name || '서울특별시'}_${b.region_2depth_name || '송파구'}_${code5}_list_coord.csv`)}${CSV_SUFFIX}`;
+
+      geocodeCache.set(cacheKey, filename);
+      resolve(filename);
+    });
+  });
+};
+
+// CSV 로드(캐시 우선) + 위도/경도 숫자화
+const loadFile = async (file) => {
+  if (fileCache.has(file)) return fileCache.get(file);
+  try {
+    const res = await fetch(file, { cache: 'force-cache' });
+    if (!res.ok) return [];
+    let text;
+    if (file.endsWith('.gz')) {
+      const ds = new DecompressionStream('gzip');
+      text = await new Response(res.body.pipeThrough(ds)).text();
+    } else {
+      text = await res.text();
+    }
+    const rows = parseCSV(text).map(row => ({
+      ...row,
+      위도: parseFloat(row['위도']),
+      경도: parseFloat(row['경도']),
+    }));
+    fileCache.set(file, rows);
+    return rows;
+  } catch {
+    return [];
+  }
+};
 
 // 필터 패널 스타일
 const FILTER_BTN_STYLE = {
@@ -309,8 +378,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
         const currentLevel = map.getLevel();
         const gridN = currentLevel >= 7 ? 7 : currentLevel >= 5 ? 5 : 3;
         const pts = makeGridPoints(bbox, gridN);
-        const files = Array.from(new Set(await Promise.all(pts.map(pt => kaptListUrlByCoord(pt.lat, pt.lng)))));
-        const all = (await Promise.all(files.map(fetchKaptListRows))).flat();
+        const files = Array.from(new Set(await Promise.all(pts.map(pointToFile))));
+        const all = (await Promise.all(files.map(loadFile))).flat();
         // 뷰포트 밖 마커 제거 (약간의 여유를 두어 가장자리 마커 보존)
         const pad = (bbox.north - bbox.south) * 0.05;
         const inView = all.filter(row =>
