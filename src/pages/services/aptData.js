@@ -62,7 +62,15 @@ export async function fetchKaptListRows(url) {
   try {
     const res = await fetch(url, { cache: 'force-cache' });
     if (!res.ok) return [];
-    const rows = parseCSV(await res.text()).map(row => ({
+    let text;
+    if (url.endsWith('.gz')) {
+      const ds = new DecompressionStream('gzip');
+      const decompressed = res.body.pipeThrough(ds);
+      text = await new Response(decompressed).text();
+    } else {
+      text = await res.text();
+    }
+    const rows = parseCSV(text).map(row => ({
       ...row,
       위도: parseFloat(row['위도']),
       경도: parseFloat(row['경도']),
@@ -200,7 +208,14 @@ async function fetchIndexedCsvs(folder, candidates) {
         const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv${CSV_SUFFIX}`)}`;
         return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
           if (!r.ok) throw new Error(`CSV HTTP ${r.status}`);
-          return parseCSV(await r.text(), false);
+          let text;
+          if (csvUrl.endsWith('.gz')) {
+            const ds = new DecompressionStream('gzip');
+            text = await new Response(r.body.pipeThrough(ds)).text();
+          } else {
+            text = await r.text();
+          }
+          return parseCSV(text, false);
         });
       });
 
@@ -267,6 +282,7 @@ export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
   // Rdata PNU 매칭 (aptNm 같으면 항상 포함, 다르면 재건축 판별 결과에 따라)
   if (pnuStr) {
     for (const obj of (wb || [])) {
+      if ((obj.cdealType || '').trim() !== '') continue;
       if (String(obj.pnu).trim() !== pnuStr) continue;
       const sameNm = targetNorm && normAptNm(obj.aptNm) === targetNorm;
       if (!sameNm && dropRdataDiffPnu) continue; // 구 단지 데이터 drop
@@ -278,6 +294,7 @@ export function listAreasForPnu(wb, pnu, kaptName = null, pdWb = null) {
   // Rdata aptNm 매칭 (다필지 단지 대응)
   if (targetNorm) {
     for (const obj of (wb || [])) {
+      if ((obj.cdealType || '').trim() !== '') continue;
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
       const ar = toNum(obj.excluUseAr);
       if (Number.isFinite(ar)) set.add(floor1(ar));
@@ -374,6 +391,8 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
 
   for (const obj of rCandidates) {
     if (!rMatches(obj)) continue;
+    if ((obj.cdealType || '').trim() !== '') continue; // 계약 취소 제외
+    if ((obj.dealingGbn || '').trim() === '직거래') continue;
 
     const ar = toNum(obj.excluUseAr);
     if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > tol) continue;
