@@ -1,14 +1,16 @@
 // src/pages/LeftPanel.js
 import FinanceChart from './FinanceChart';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
+import { createChart, LineSeries, HistogramSeries, LineStyle } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
+  kaptListUrlByCode5, fetchKaptListRows,
 } from './services/aptData';
+import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 
 /* 면적 탭 스크롤바 스타일 (webkit) */
 const areaScrollbarStyle = `
@@ -26,11 +28,23 @@ if (typeof document !== 'undefined') {
 /* Hot 레이블 흔들림 애니메이션 */
 const hotKeyframes = `
 @keyframes hotWiggle {
-  0%   { transform: rotate(-12deg) scale(1);   }
-  25%  { transform: rotate(-16deg) scale(1.08); }
-  50%  { transform: rotate(-12deg) scale(1);   }
-  75%  { transform: rotate(-8deg)  scale(1.08); }
-  100% { transform: rotate(-12deg) scale(1);   }
+  0%   { transform:  scale(1);   }
+  25%  { transform:  scale(1); }
+  50%  { transform:  scale(1);   }
+  75%  { transform:  scale(1); }
+  100% { transform:  scale(1);   }
+}
+@keyframes favFloat {
+  0%   { opacity: 1; transform: translateY(0px);   }
+  100% { opacity: 0; transform: translateY(-80px); }
+}
+@keyframes favHighlightBg {
+  0%   { background: #b35a00; }
+  100% { background: transparent; }
+}
+@keyframes favHighlightText {
+  0%   { color: #ffffff; }
+  100% { color: inherit; }
 }
 `;
 if (typeof document !== 'undefined') {
@@ -91,12 +105,13 @@ function makeChartOptions(height) {
 // ────────────────────────────────────────────
 // 아파트 거래 차트 컴포넌트
 // ────────────────────────────────────────────
-function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile }) {
-  const containerRef = useRef(null);
-  const chartRef     = useRef(null);
-  const volSeriesRef = useRef(null);
-  const avgSeriesRef = useRef(null);
-  const svgRef       = useRef(null);
+function AptTradeChart({ x, vol, avg, realMask, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile }) {
+  const containerRef    = useRef(null);
+  const chartRef        = useRef(null);
+  const volSeriesRef    = useRef(null);
+  const avgSeriesRef    = useRef(null);  // 실선 (실데이터)
+  const avgDashSeriesRef = useRef(null); // 점선 (보간)
+  const svgRef          = useRef(null);
 
   const chartHeight = isMobile ? 200 : 240;
 
@@ -190,10 +205,11 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
     });
     volSeriesRef.current = volSeries;
 
-    // 평균가 라인
+    // 평균가 실선 (실거래 데이터)
     const avgSeries = chart.addSeries(LineSeries, {
-      color: 'rgba(196, 154, 42, 0.7)',
+      color: 'rgba(196, 154, 42, 0.85)',
       lineWidth: 2,
+      lineStyle: LineStyle.Solid,
       priceScaleId: 'right',
       lastValueVisible: true,
       priceLineVisible: false,
@@ -206,6 +222,23 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
       },
     });
     avgSeriesRef.current = avgSeries;
+
+    // 평균가 점선 (보간 구간)
+    const avgDashSeries = chart.addSeries(LineSeries, {
+      color: 'rgba(196, 154, 42, 0.4)',
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+      priceScaleId: 'right',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      priceFormat: {
+        type: 'custom',
+        formatter: (v) => `${v.toFixed(1)}억`,
+        minMove: 0.01,
+      },
+    });
+    avgDashSeriesRef.current = avgDashSeries;
 
     // X/Y축 변경 모두 대응 — RAF 루프 (항상 최신 ref 호출)
     let rafId;
@@ -229,6 +262,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
       chartRef.current = null;
       volSeriesRef.current = null;
       avgSeriesRef.current = null;
+      avgDashSeriesRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -244,12 +278,20 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
     })).sort((a, b) => a.time > b.time ? 1 : -1);
     volSeriesRef.current?.setData(volData);
 
-    // 평균가 데이터 (0 제외)
-    const avgData = x.map((ym, i) => ({
-      time: toTime(ym),
-      value: avg[i] || null,
-    })).filter(d => d.value).sort((a, b) => a.time > b.time ? 1 : -1);
-    avgSeriesRef.current?.setData(avgData);
+    // 평균가: 실선(실거래) / 점선(보간) 분리
+    // lightweight-charts는 null로 끊어야 구간이 분리되므로
+    // 실선: 보간 구간은 null, 점선: 실거래 구간은 null
+    const solidData = [], dashData = [];
+    x.forEach((ym, i) => {
+      const t = toTime(ym);
+      const v = avg[i] || null;
+      const isReal = realMask?.[i] ?? true;
+      solidData.push({ time: t, value: isReal ? v : null });
+      dashData.push({ time: t, value: isReal ? null : v });
+    });
+    const sorted = (arr) => arr.filter(d => d.value !== null && d.value !== undefined).sort((a, b) => a.time > b.time ? 1 : -1);
+    avgSeriesRef.current?.setData(sorted(solidData));
+    avgDashSeriesRef.current?.setData(sorted(dashData));
 
     // X축 범위 설정
     requestAnimationFrame(() => {
@@ -265,7 +307,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
       }
       redrawDotsRef.current?.();
     });
-  }, [x, vol, avg, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [x, vol, avg, realMask, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // yearWindow 변경 시 X축 범위 업데이트
   useEffect(() => {
@@ -303,7 +345,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
 // ────────────────────────────────────────────
 // 메인 컴포넌트
 // ────────────────────────────────────────────
-function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onClose, onOpenChartPanel, isMobile = false, isTablet = false }) {
+function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, isMobile = false, isTablet = false }) {
   const aptKey = selectedApt
     ? `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`
     : null;
@@ -321,6 +363,8 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [pnu, setPnu] = useState(null);
   const [pnuErr, setPnuErr] = useState(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [favToast, setFavToast] = useState(null); // { type: 'added'|'removed', x, y, key }
+  const favBtnRef  = useRef(null);
   const [areas, setAreas] = useState([]);
   const [selArea, setSelArea] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
@@ -331,14 +375,18 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [x, setX] = useState([]);
   const [vol, setVol] = useState([]);
   const [avg, setAvg] = useState([]);
+  const [realMask, setRealMask] = useState([]);
   const [ptsX, setPtsX] = useState([]);
   const [ptsY, setPtsY] = useState([]);
   const [pPtsX, setPPtsX] = useState([]);
   const [pPtsY, setPPtsY] = useState([]);
 
   // workbook refs
-  const pdWbRef = useRef(null);
-  const wbRef   = useRef(null);
+  const pdWbRef     = useRef(null);
+  const wbRef       = useRef(null);
+  const pnuIdxRef   = useRef(null); // Rdata pnu 인덱스
+  const nameIdxRef  = useRef(null); // Rdata aptNm 인덱스
+  const pdNameIdxRef = useRef(null); // Pdata aptNm 인덱스
 
   // Hot 면적
   const [hotAreas, setHotAreas] = useState([]);
@@ -392,28 +440,8 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         const s2 = b.region_2depth_name || '';
         if (!code5 || !s1 || !s2) return;
 
-        const R2_BASE = process.env.NODE_ENV === 'production'
-          ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
-          : '';
-
-        // code5_map.json으로 정확한 파일명 조회
-        let fileName = `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`;
-        try {
-          const mapRes = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
-          if (mapRes.ok) {
-            const mapJson = await mapRes.json();
-            if (mapJson?.[code5]) fileName = `${R2_BASE}/KaptList/${mapJson[code5]}`;
-          }
-        } catch { /* 폴백 파일명 사용 */ }
-
-        const csvRes = await fetch(fileName, { cache: 'no-store' });
-        if (!csvRes.ok) return;
-        const { parseCSV } = await import('../utils/csvUtils');
-        const rows = parseCSV(await csvRes.text()).map(row => ({
-          ...row,
-          위도: parseFloat(row['위도']),
-          경도: parseFloat(row['경도']),
-        }));
+        const url = await kaptListUrlByCode5(s1, s2, code5);
+        const rows = await fetchKaptListRows(url);
 
         // 검색 좌표와 가장 가까운 아파트 찾기 (300m 이내)
         let best = null, bestDist = Infinity;
@@ -439,10 +467,13 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
     async function run() {
       setPnu(null); setPnuErr(null);
       setAreas([]); setSelArea(null);
-      setX([]); setVol([]); setAvg([]); setPtsX([]); setPtsY([]);
+      setX([]); setVol([]); setAvg([]); setRealMask([]); setPtsX([]); setPtsY([]);
       setPPtsX([]); setPPtsY([]);
-      pdWbRef.current = null;
-      wbRef.current   = null;
+      pdWbRef.current    = null;
+      wbRef.current      = null;
+      pnuIdxRef.current  = null;
+      nameIdxRef.current = null;
+      pdNameIdxRef.current = null;
       setHotAreas([]);
       setTradeErr(null);
       if (!selectedApt) return;
@@ -462,10 +493,14 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         if (cancelled) return;
         if (rResult.status === 'rejected') throw rResult.reason;
 
-        const { wb } = rResult.value;
+        const { wb, pnuIndex, nameIndex } = rResult.value;
         const _pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
-        pdWbRef.current = _pdWb;
-        wbRef.current   = wb;
+        const _pdNameIndex = pResult.status === 'fulfilled' ? pResult.value?.nameIndex ?? null : null;
+        pdWbRef.current      = _pdWb;
+        wbRef.current        = wb;
+        pnuIdxRef.current    = pnuIndex ?? null;
+        nameIdxRef.current   = nameIndex ?? null;
+        pdNameIdxRef.current = _pdNameIndex;
 
         const rawList = listAreasForPnu(wb, _pnu, selectedApt['kaptName'] || null, _pdWb);
         if (!rawList.length) { setPnuErr('data가 없습니다_면적 후보 없음'); return; }
@@ -524,9 +559,10 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           wb, pdWb: _pdWb, pnu: _pnu,
           kaptName: selectedApt['kaptName'] || null,
           areaNorm: initArea, smoothWindow,
+          pnuIndex, nameIndex, pdNameIndex: _pdNameIndex,
         });
         if (!cancelled) {
-          setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
+          setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
           setPtsX(agg.ptsX); setPtsY(agg.ptsY);
           setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
           setYearWindow(5);
@@ -554,9 +590,10 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           wb, pdWb: pdWbRef.current, pnu,
           kaptName: selectedApt['kaptName'] || null,
           areaNorm: selArea, smoothWindow,
+          pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
         });
         if (!cancelled) {
-          setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
+          setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
           setPtsX(agg.ptsX); setPtsY(agg.ptsY);
           setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
         }
@@ -580,8 +617,9 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         wb, pdWb: pdWbRef.current, pnu,
         kaptName: selectedApt['kaptName'] || null,
         areaNorm: area, smoothWindow,
+        pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
       });
-      setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
+      setX(agg.x); setVol(agg.vol); setAvg(agg.avg); setRealMask(agg.realMask ?? []);
       setPtsX(agg.ptsX); setPtsY(agg.ptsY);
       setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
       setYearWindow(5);
@@ -618,47 +656,80 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const padding = isMobile ? '14px 16px' : isTablet ? '16px 20px' : '20px 24px';
 
   return (
-    <aside
-      style={{
-        width: '100%',
-        background: '#fff', borderRight: '1.5px solid #E6DED4',
-        padding, overflowY: isMobile ? 'scroll' : 'auto',
-        display: 'flex', flexDirection: 'column', gap: 14,
-        boxSizing: 'border-box', position: 'relative',
-        height: '100%',
-      }}
-    >
+    <aside style={{ ...commonPanelStyle, borderRight: '1.5px solid #E6DED4' }}>
       {/* ── 상단 헤더: 아파트명 + 아이콘 버튼들 ── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, position: 'relative', minHeight: 36, borderBottom: '1px solid #E6DED4' }}>
+      <div style={commonHeaderStyle}>
 
         {/* 아파트명 or placeholder */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {selectedApt ? (
-            <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#1F1D1B', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {trimAptName(selectedApt.kaptName)}
-            </div>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#1F1D1B' }}>
+              <span style={{ color: '#6B625B', flexShrink: 0 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={20} height={20}>
+                  <path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/>
+                </svg>
+              </span>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {trimAptName(selectedApt.kaptName)}
+              </span>
+            </span>
           ) : (
-            <div style={{ fontSize: '1rem', color: '#C9BFB4', fontWeight: 500 }}>아파트를 선택하세요</div>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#C9BFB4' }}>
+              <span style={{ flexShrink: 0 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={20} height={20}>
+                  <path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/>
+                </svg>
+              </span>
+              아파트를 선택하세요
+            </span>
           )}
         </div>
 
         {/* 즐겨찾기 별 — 아파트 선택 시만 */}
         {selectedApt && (
-          <button
-            onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
-            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}
-            title={isFav ? '즐겨찾기 해제' : '즐겨찾기 추가'}
-          >
-            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
-              <polygon
-                points="8,2 9.8,6.5 14.5,6.5 10.8,9.5 12.2,14 8,11 3.8,14 5.2,9.5 1.5,6.5 6.2,6.5"
-                fill={isFav ? '#f5c518' : 'none'}
-                stroke={isFav ? '#f5c518' : '#aaa'}
-                strokeWidth="1.2"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              ref={favBtnRef}
+              onClick={() => {
+                const rect = favBtnRef.current?.getBoundingClientRect();
+                const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+                const y = rect ? rect.top : 200;
+                if (isFav) {
+                  removeFavoriteApt(aptKey);
+                  setFavToast({ type: 'removed', x, y, key: null });
+                } else {
+                  addFavoriteApt(selectedApt);
+                  setFavToast({ type: 'added', x, y, key: aptKey });
+                }
+                setTimeout(() => setFavToast(null), 1400);
+              }}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+            >
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+                <polygon
+                  points="8,2 9.8,6.5 14.5,6.5 10.8,9.5 12.2,14 8,11 3.8,14 5.2,9.5 1.5,6.5 6.2,6.5"
+                  fill={isFav ? '#f5c518' : 'none'}
+                  stroke={isFav ? '#f5c518' : '#aaa'}
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {favToast && (
+              <span style={{
+                position: 'fixed',
+                left: favToast.x -90,
+                top: favToast.y -55,
+                transform: 'translateX(-50%)',
+                color: '#b35a00', fontSize: '0.8rem', fontWeight: 900,
+                whiteSpace: 'nowrap', pointerEvents: 'none',
+                zIndex: 9999,
+                animation: 'favFloat 2s linear forwards',
+              }}>
+                {favToast.type === 'added' ? '즐겨찾기 추가' : '즐겨찾기 해제'}
+              </span>
+            )}
+          </div>
         )}
 
         {/* 추가정보 버튼 — 아파트 선택 시만 */}
@@ -752,18 +823,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           )}
         </div>
 
-        {/* 닫기 아이콘 */}
-        <button
-          onClick={onClose}
-          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center', flexShrink: 0 }}
-          title="닫기"
-        >
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-            <line x1="3" y1="3" x2="13" y2="13" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
-            <line x1="13" y1="3" x2="3" y2="13" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
-          </svg>
-        </button>
       </div>
+
+      {/* ── 콘텐츠 영역 ── */}
+      <div style={{
+        flex: 1,
+        overflowY: isMobile ? 'scroll' : 'auto',
+        display: 'flex', flexDirection: 'column', gap: 14,
+        padding,
+        boxSizing: 'border-box',
+      }}>
 
       {pnuErr && <div style={{ color: '#c33', fontSize: '0.88rem' }}>{pnuErr}</div>}
 
@@ -906,7 +975,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
               )}
               {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
                 <AptTradeChart
-                  x={x} vol={vol} avg={avg}
+                  x={x} vol={vol} avg={avg} realMask={realMask}
                   ptsX={ptsX} ptsY={ptsY}
                   pPtsX={pPtsX} pPtsY={pPtsY}
                   yearWindow={yearWindow}
@@ -933,11 +1002,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
               {favApts.map(fav => {
                 const isActive = fav.key === aptKey;
+                const isNew = favToast?.type === 'added' && favToast?.key === fav.key;
                 return (
                   <div
                     key={fav.key}
                     onClick={() => onSelectApt?.(fav)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 4px', cursor: 'pointer' }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      padding: '3px 6px', cursor: 'pointer', borderRadius: 6,
+                      animation: isNew ? 'favHighlightBg 2s linear forwards' : 'none',
+                    }}
                   >
                     <div style={{
                       width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
@@ -947,6 +1021,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                       fontSize: '0.72rem', fontWeight: isActive ? 700 : 400,
                       color: isActive ? '#1F1D1B' : '#888780',
                       whiteSpace: 'nowrap',
+                      animation: isNew ? 'favHighlightText 2s linear forwards' : 'none',
                     }}>
                       {trimAptName(fav.kaptName)}
                     </span>
@@ -969,6 +1044,8 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         aptName={selectedApt ? `${trimAptName(selectedApt.kaptName)} ${selArea}㎡` : null}
         onOpenChartPanel={onOpenChartPanel}
       />
+
+      </div>{/* ── 콘텐츠 영역 끝 ── */}
 
     </aside>
   );

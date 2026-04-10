@@ -1,28 +1,14 @@
 // src/pages/Mainmap.js
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useCallback } from 'react';
 import { Map as KakaoMap, CustomOverlayMap } from 'react-kakao-maps-sdk';
-import { parseCSV } from '../utils/csvUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea,
   pickInitialArea, groupAreasToRep,
+  kaptListUrlByCoord, fetchKaptListRows,
 } from './services/aptData';
 
-const fileCache = new Map();
-let code5MapCache = null;
-const loadCode5Map = async () => {
-  if (code5MapCache) return code5MapCache;
-  try {
-    const r = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
-    if (r.ok) code5MapCache = await r.json();
-  } catch { /* 로드 실패 시 null 유지 */ }
-  return code5MapCache;
-};
-
-const R2_BASE = process.env.NODE_ENV === 'production'
-  ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
-  : "";
 // n×n 격자 샘플 포인트 (줌 레벨이 높을수록 뷰포트가 넓어 더 많이 필요)
 const makeGridPoints = (bbox, n = 3) => {
   const lats = Array.from({ length: n }, (_, i) =>
@@ -34,50 +20,155 @@ const makeGridPoints = (bbox, n = 3) => {
   return pts;
 };
 
-// 포인트 → CSV 파일명 (카카오 역지오코딩 + code5_map.json)
-const pointToFile = (pt) => new Promise((resolve) => {
-  const geocoder = new window.kakao.maps.services.Geocoder();
-  geocoder.coord2RegionCode(pt.lng, pt.lat, async (res, status) => {
-    const fallback = `${R2_BASE}/KaptList/서울특별시_송파구_11710_list_coord.csv`;
-    if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
-      resolve(fallback);
-      return;
-    }
-    const b = res.find(r => r.region_type === 'B') || res[0];
-    const code5 = (b.code || '').slice(0, 5) || '11710';
 
-    // code5_map.json에서 정확한 파일명 조회
-    const map = await loadCode5Map();
-    if (map?.[code5]) {
-      resolve(`${R2_BASE}/KaptList/${map[code5]}`);
-      return;
-    }
-
-    // 폴백: s1_s2_code5 조합
-    const s1 = b.region_1depth_name || '서울특별시';
-    const s2 = b.region_2depth_name || '송파구';
-    resolve(`${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`);
-  });
-});
-
-// CSV 로드(캐시 우선) + 위도/경도 숫자화
-const loadFile = async (file) => {
-  if (fileCache.has(file)) return fileCache.get(file);
-  try {
-    const res = await fetch(file, { cache: 'no-store' });
-    if (!res.ok) return [];
-    const rows = parseCSV(await res.text()).map(row => ({
-      ...row,
-      위도: parseFloat(row['위도']),
-      경도: parseFloat(row['경도']),
-    }));
-    fileCache.set(file, rows);
-    return rows;
-  } catch {
-    return [];
-  }
+// 필터 패널 스타일
+const FILTER_BTN_STYLE = {
+  position: 'absolute',
+  top: 12, right: 12,
+  background: '#fff',
+  border: '1.5px solid #e0e8ff',
+  borderRadius: 20,
+  padding: '6px 14px',
+  fontSize: '13px',
+  fontWeight: 700,
+  color: '#1f2b49',
+  cursor: 'pointer',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  userSelect: 'none',
+  zIndex: 10,
 };
 
+const PANEL_STYLE = {
+  position: 'absolute',
+  top: 50, right: 12,
+  background: '#fff',
+  border: '1px solid #e0e8ff',
+  borderRadius: 12,
+  padding: '14px 16px',
+  boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+  zIndex: 10,
+  minWidth: 220,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+};
+
+const SECTION_TITLE = {
+  fontSize: '11px',
+  fontWeight: 700,
+  color: '#888',
+  marginBottom: 6,
+  letterSpacing: '0.04em',
+};
+
+const TOGGLE_CHIP = (active) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '3px 10px',
+  borderRadius: 12,
+  border: `1.5px solid ${active ? '#4a7fff' : '#dde3f0'}`,
+  background: active ? '#eef3ff' : '#f7f9fc',
+  color: active ? '#1f2b49' : '#aab',
+  fontSize: '12px',
+  fontWeight: 600,
+  cursor: 'pointer',
+  userSelect: 'none',
+  transition: 'all 0.15s',
+});
+
+const DEFAULT_SALE_NM = ['분양', '임대', '혼합'];
+
+function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
+  const { saleNm, minHoCnt, minUsedate, aptNm } = filters;
+
+  const toggleSale = (v) => {
+    const next = saleNm.includes(v) ? saleNm.filter(x => x !== v) : [...saleNm, v];
+    if (next.length === 0) return; // 최소 1개 선택 유지
+    onChange({ ...filters, saleNm: next });
+  };
+
+  const toggleApt = (v) => {
+    const next = aptNm.includes(v) ? aptNm.filter(x => x !== v) : [...aptNm, v];
+    if (next.length === 0) return;
+    onChange({ ...filters, aptNm: next });
+  };
+
+  return (
+    <div style={PANEL_STYLE}>
+      {/* 분양구분 */}
+      <div>
+        <div style={SECTION_TITLE}>분양구분</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {DEFAULT_SALE_NM.map(v => (
+            <div key={v} style={TOGGLE_CHIP(saleNm.includes(v))} onClick={() => toggleSale(v)}>{v}</div>
+          ))}
+        </div>
+      </div>
+
+      {/* 세대수 */}
+      <div>
+        <div style={SECTION_TITLE}>세대수 (최소)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="range"
+            min={0} max={3000} step={50}
+            value={minHoCnt}
+            onChange={e => onChange({ ...filters, minHoCnt: Number(e.target.value) })}
+            style={{ flex: 1, accentColor: '#4a7fff' }}
+          />
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#1f2b49', minWidth: 50 }}>
+            {minHoCnt === 0 ? '전체' : `${minHoCnt}세대+`}
+          </span>
+        </div>
+      </div>
+
+      {/* 사용승인일 */}
+      <div>
+        <div style={SECTION_TITLE}>사용승인일 (최소)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="range"
+            min={1980} max={2025} step={1}
+            value={minUsedate}
+            onChange={e => onChange({ ...filters, minUsedate: Number(e.target.value) })}
+            style={{ flex: 1, accentColor: '#4a7fff' }}
+          />
+          <span style={{ fontSize: '12px', fontWeight: 700, color: '#1f2b49', minWidth: 50 }}>
+            {minUsedate === 1980 ? '전체' : `${minUsedate}년+`}
+          </span>
+        </div>
+      </div>
+
+      {/* 건물구분 */}
+      {aptTypeOptions.length > 0 && (
+        <div>
+          <div style={SECTION_TITLE}>건물구분</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {aptTypeOptions.map(v => (
+              <div key={v} style={TOGGLE_CHIP(aptNm.includes(v))} onClick={() => toggleApt(v)}>{v}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 초기화 */}
+      <div
+        style={{ textAlign: 'center', fontSize: '12px', color: '#4a7fff', cursor: 'pointer', fontWeight: 600 }}
+        onClick={() => onChange({
+          saleNm: [...DEFAULT_SALE_NM],
+          minHoCnt: 0,
+          minUsedate: 1980,
+          aptNm: [...aptTypeOptions],
+        })}
+      >
+        필터 초기화
+      </div>
+    </div>
+  );
+}
 
 function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }) {
   const mapRef = useRef(null);
@@ -86,6 +177,16 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
   const [loading, setLoading] = useState(false);
   // kaptKey → { area, price } 마커 가격 캐시
   const [markerPrices, setMarkerPrices] = useState(new Map());
+
+  // 필터 상태
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filters, setFilters] = useState({
+    saleNm: [...DEFAULT_SALE_NM],
+    minHoCnt: 0,
+    minUsedate: 1980,
+    aptNm: [], // 빈 배열 = 아직 옵션 미수집 (= 전체 허용)
+  });
+  const [aptTypeOptions, setAptTypeOptions] = useState([]);
 
   const lastBBoxRef = useRef(null);
   const idleTimerRef = useRef(null);
@@ -208,15 +309,34 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
         const currentLevel = map.getLevel();
         const gridN = currentLevel >= 7 ? 7 : currentLevel >= 5 ? 5 : 3;
         const pts = makeGridPoints(bbox, gridN);
-        const files = Array.from(new Set(await Promise.all(pts.map(pointToFile))));
-        const all = (await Promise.all(files.map(loadFile))).flat();
+        const files = Array.from(new Set(await Promise.all(pts.map(pt => kaptListUrlByCoord(pt.lat, pt.lng)))));
+        const all = (await Promise.all(files.map(fetchKaptListRows))).flat();
+        // 뷰포트 밖 마커 제거 (약간의 여유를 두어 가장자리 마커 보존)
+        const pad = (bbox.north - bbox.south) * 0.05;
+        const inView = all.filter(row =>
+          row['위도'] >= bbox.south - pad && row['위도'] <= bbox.north + pad &&
+          row['경도'] >= bbox.west  - pad && row['경도'] <= bbox.east  + pad
+        );
         const dedup = [];
         const seen = new Set();
-        for (const row of all) {
+        for (const row of inView) {
           const key = `${row['위도']}|${row['경도']}|${row['kaptName']}`;
           if (!seen.has(key)) { seen.add(key); dedup.push(row); }
         }
         setMarkers(dedup);
+
+        // 건물구분 옵션 동적 수집
+        const types = [...new Set(dedup.map(r => r['codeAptNm']).filter(Boolean))].sort();
+        setAptTypeOptions(prev => {
+          const merged = [...new Set([...prev, ...types])].sort();
+          // 새로운 타입이 생기면 필터에도 추가
+          setFilters(f => {
+            const newTypes = types.filter(t => !prev.includes(t));
+            if (newTypes.length === 0) return f;
+            return { ...f, aptNm: [...new Set([...f.aptNm, ...newTypes])] };
+          });
+          return merged;
+        });
 
         // 가격 정보 백그라운드 로드 (현재 줌 레벨 전달)
         const loadId = ++priceLoadIdRef.current;
@@ -226,6 +346,45 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
       }
     }, 200);
   };
+
+  // 필터 적용
+  const filteredMarkers = useMemo(() => {
+    return markers.filter(row => {
+      // 분양구분
+      const sale = row['codeSaleNm'] || '';
+      if (filters.saleNm.length > 0 && !filters.saleNm.includes(sale)) {
+        // 알 수 없는 값은 통과
+        if (DEFAULT_SALE_NM.includes(sale)) return false;
+      }
+      // 세대수
+      if (filters.minHoCnt > 0) {
+        const cnt = parseFloat(row['kaptdaCnt']) || 0;
+        if (cnt < filters.minHoCnt) return false;
+      }
+      // 사용승인일
+      if (filters.minUsedate > 1980) {
+        const dateStr = String(row['kaptUsedate'] || '');
+        const year = parseInt(dateStr.slice(0, 4), 10);
+        if (!isNaN(year) && year < filters.minUsedate) return false;
+      }
+      // 건물구분
+      if (filters.aptNm.length > 0 && aptTypeOptions.length > 0) {
+        const apt = row['codeAptNm'] || '';
+        if (aptTypeOptions.includes(apt) && !filters.aptNm.includes(apt)) return false;
+      }
+      return true;
+    });
+  }, [markers, filters, aptTypeOptions]);
+
+  // 활성 필터 개수 (배지용)
+  const activeFilterCount = useMemo(() => {
+    let cnt = 0;
+    if (filters.saleNm.length < DEFAULT_SALE_NM.length) cnt++;
+    if (filters.minHoCnt > 0) cnt++;
+    if (filters.minUsedate > 1980) cnt++;
+    if (aptTypeOptions.length > 0 && filters.aptNm.length < aptTypeOptions.length) cnt++;
+    return cnt;
+  }, [filters, aptTypeOptions]);
 
   const selectRow = (row) => {
     if (typeof onSelectApt === 'function') onSelectApt(row);
@@ -261,7 +420,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
         )}
 
         {/* 줌 레벨별 마커 렌더링 */}
-        {markers.map((row, i) => {
+        {filteredMarkers.map((row, i) => {
           const pos = { lat: row['위도'], lng: row['경도'] };
 
           // 레벨 6~7: 주황색 점만
@@ -295,8 +454,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
           }
 
           // 레벨 1~3: 이름 + 면적 + 가격
-          const key = `${row['kaptName']}_${row['bjdCode'] || ''}`;
-          const info = markerPrices.get(key);
+          const priceKey = `${row['kaptName']}_${row['bjdCode'] || ''}`;
+          const info = markerPrices.get(priceKey);
           return (
             <CustomOverlayMap key={`lbl-${i}`} position={pos} yAnchor={1} xAnchor={0.5} clickable>
               <div style={labelStyle} onClick={() => selectRow(row)}>
@@ -311,6 +470,34 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
           );
         })}
       </KakaoMap>
+
+      {/* 필터 버튼 */}
+      <div style={FILTER_BTN_STYLE} onClick={() => setFilterOpen(o => !o)}>
+        <span>필터</span>
+        {activeFilterCount > 0 && (
+          <span style={{
+            background: '#4a7fff',
+            color: '#fff',
+            borderRadius: '50%',
+            width: 18, height: 18,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '11px',
+            fontWeight: 700,
+          }}>{activeFilterCount}</span>
+        )}
+      </div>
+
+      {/* 필터 패널 */}
+      {filterOpen && (
+        <FilterPanel
+          filters={filters}
+          onChange={setFilters}
+          aptTypeOptions={aptTypeOptions}
+          onClose={() => setFilterOpen(false)}
+        />
+      )}
 
       <div style={{
         position: 'absolute',

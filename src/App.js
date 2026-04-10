@@ -11,6 +11,28 @@ import Login from './pages/Login';
 import BoardPanel from './pages/BoardPanel';
 import ChartPanel from './pages/ChartPanel';
 
+// 공용 닫기 버튼 — 헤더 좌측 "← 닫기"
+export function CloseButton({ onClose, label = '닫기' }) {
+  return (
+    <button
+      onClick={onClose}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        border: 'none', background: 'none', cursor: 'pointer',
+        color: '#6B625B', fontWeight: 600, fontSize: '0.92rem',
+        padding: '4px 8px 4px 2px', borderRadius: 8, flexShrink: 0,
+      }}
+      aria-label="닫기"
+    >
+      <svg viewBox="0 0 16 16" fill="none" width={20} height={20}>
+        <line x1="13" y1="8" x2="3" y2="8" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round"/>
+        <polyline points="7,4 3,8 7,12" stroke="#aaa" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      </svg>
+      {label}
+    </button>
+  );
+}
+
 function App() {
   const { isMobile, isTablet, isDesktop } = useBreakpoint();
 
@@ -18,54 +40,47 @@ function App() {
   const [mapLevel, setMapLevel] = useLocalStorage('map_level', 5);
   const [selectedApt, setSelectedApt] = useLocalStorage('selected_apt', null);
 
-  // 왼쪽 패널: 데스크탑 기본 열림, 모바일/태블릿 기본 닫힘
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(() => window.innerWidth >= 1200);
-
-  useEffect(() => {
-    if (isMobile || isTablet) setIsLeftPanelOpen(false);
-    if (isDesktop) setIsLeftPanelOpen(true);
-  }, [isMobile, isTablet, isDesktop]);
-
-  // 오른쪽 오버레이 패널: 'login' | 'chart' | 'board' | null
+  // 통합 패널 상태: 'info' | 'login' | 'chart' | 'board' | null
   const [openPanel, setOpenPanel] = useState(null);
-  const togglePanel = (key) => {
-    setOpenPanel(prev => (prev === key ? null : key));
-    if (!isDesktop) setIsLeftPanelOpen(false);
-  };
-  const closePanel = () => setOpenPanel(null);
 
-  // 뒤로가기 버튼 처리 — 열린 패널 닫기
+  const togglePanel = (key) => setOpenPanel(prev => prev === key ? null : key);
+  const closePanel  = () => setOpenPanel(null);
+
+  // 데스크탑 초기 상태: 정보 패널 열림
+  useEffect(() => {
+    if (isDesktop) setOpenPanel(p => p ?? 'info');
+  }, [isDesktop]);
+
+  // 뒤로가기 버튼 처리
   const openPanelRef = useRef(openPanel);
-  const isLeftPanelOpenRef = useRef(isLeftPanelOpen);
   useEffect(() => { openPanelRef.current = openPanel; }, [openPanel]);
-  useEffect(() => { isLeftPanelOpenRef.current = isLeftPanelOpen; }, [isLeftPanelOpen]);
 
-  // 게시판 내부 뒤로가기 핸들러 (detail→list, form→list)
   const boardBackHandlerRef = useRef(null);
+
 
   useEffect(() => {
     history.pushState(null, '');
     const handlePopState = () => {
-      // 게시판이 열려 있으면 내부 뒤로가기 우선 처리
       if (openPanelRef.current === 'board') {
         boardBackHandlerRef.current?.();
-        // 내부에서 처리됐든 아니든 게시판은 닫지 않고 더미 상태 재적립
         history.pushState(null, '');
         return;
       }
-
-      const hadPanel = openPanelRef.current || isLeftPanelOpenRef.current;
       if (openPanelRef.current) {
         setOpenPanel(null);
-      } else if (isLeftPanelOpenRef.current) {
-        setIsLeftPanelOpen(false);
+        history.pushState(null, '');
       }
-      // 패널을 닫은 경우 다음 뒤로가기를 위해 더미 상태 재적립
-      if (hadPanel) history.pushState(null, '');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // 로그인 유저 상태
+  const [user, setUser] = useLocalStorage('kakao_user', null);
+  const handleLoginSuccess = (data) => {
+    setUser(data);
+  };
+  const handleLogout = () => setUser(null);
 
   // 즐겨찾기
   const [favApts, setFavApts] = useLocalStorage('fav_apts', []);
@@ -76,68 +91,86 @@ function App() {
       key: aptKey, kaptName: row.kaptName, kaptAddr: row.kaptAddr,
       bjdCode: row.bjdCode, as1: row.as1, as2: row.as2, as3: row.as3, as4: row.as4,
     };
-    setFavApts(prev => (prev.some(a => a.key === aptKey) ? prev : [...prev, newFav]));
+    setFavApts(prev => prev.some(a => a.key === aptKey) ? prev : [...prev, newFav]);
   };
   const removeFavoriteApt = (aptKey) => setFavApts(prev => prev.filter(a => a.key !== aptKey));
 
   const handleSelectApt = useCallback((row) => {
     setSelectedApt(row || null);
-    // 모바일/태블릿: 아파트 선택 시 LeftPanel 자동 열기, 다른 패널 닫기
-    if (row && !isDesktop) {
-      setIsLeftPanelOpen(true);
-      setOpenPanel(null);
-    }
-  }, [isDesktop]);
+    if (row) setOpenPanel('info');
+  }, []);
+
+  // 네비바 아이콘
+  const SVG_ATTRS = { viewBox: '0 0 24 24', fill: 'none', strokeWidth: '1.7', strokeLinecap: 'round', strokeLinejoin: 'round', width: 24, height: 24 };
+  const NAV_ICONS = {
+    info: <svg {...SVG_ATTRS} stroke="currentColor"><path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/></svg>,
+    chart: <svg {...SVG_ATTRS} stroke="currentColor"><polyline points="3,17 8,10 12,13 16,7 21,9"/><line x1="3" y1="21" x2="21" y2="21"/><line x1="3" y1="21" x2="3" y2="4"/></svg>,
+    board: <svg {...SVG_ATTRS} stroke="currentColor"><path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-5 4V4a1 1 0 011-1z"/></svg>,
+    login: <svg {...SVG_ATTRS} stroke="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>,
+  };
 
   const panelButtons = [
-    { icon: '👤', label: '로그인', key: 'login' },
-    { icon: '📈', label: '차트비교', key: 'chart' },
-    { icon: '💬', label: '게시판', key: 'board' },
+    { icon: NAV_ICONS.info,  label: '정보',    key: 'info'  },
+    { icon: NAV_ICONS.chart, label: '차트비교', key: 'chart' },
+    { icon: NAV_ICONS.board, label: '게시판',   key: 'board' },
+    {
+      icon: user?.profileImage
+        ? <img src={user.profileImage} alt="프로필" style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover' }} />
+        : NAV_ICONS.login,
+      label: user ? user.nickname : '로그인',
+      key: 'login',
+    },
   ];
 
-  // LeftPanel 너비: 모바일 전체, 태블릿 420px, 데스크탑 440px
-  const leftPanelWidth = isMobile ? '100vw' : isTablet ? '420px' : '440px';
+  // 패널 너비: 모바일 전체, 태블릿 420px, 데스크탑 440px
+  const panelWidth = isMobile ? '100vw' : isTablet ? '420px' : '440px';
 
-  // 오버레이 패널: 모바일·태블릿 바텀시트 / 데스크탑 센터 오버레이
-  const isBottomSheet = !isDesktop;
+  // 데스크탑: 사이드바가 열리면 지도 영역을 밀어냄
+  const sidebarOpen = isDesktop && openPanel !== null;
 
   return (
     <div className="App" style={{ display: 'flex', height: '100vh', width: '100%', overflow: 'hidden', position: 'relative' }}>
 
-      {/* LeftPanel 백드롭 (모바일·태블릿) */}
-      {!isDesktop && isLeftPanelOpen && (
-        <div
-          onClick={() => setIsLeftPanelOpen(false)}
-          style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 3 }}
-          aria-hidden
-        />
+      {/* ── 데스크탑: 좌측 고정 사이드바 ── */}
+      {isDesktop && (
+        <div style={{
+          width: sidebarOpen ? panelWidth : 0,
+          minWidth: sidebarOpen ? panelWidth : 0,
+          transition: 'width 0.28s cubic-bezier(0.4,0,0.2,1), min-width 0.28s cubic-bezier(0.4,0,0.2,1)',
+          overflow: 'hidden',
+          position: 'relative',
+          zIndex: 4,
+          boxShadow: sidebarOpen ? '4px 0 24px rgba(0,0,0,0.08)' : 'none',
+          background: '#fff',
+          display: 'flex', flexDirection: 'column',
+        }}>
+          <div style={{ width: panelWidth, height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'info'  ? 'flex' : 'none', flexDirection: 'column' }}>
+              <LeftPanel
+                selectedApt={selectedApt}
+                onPanTo={(lat, lng) => setMapCenter({ lat, lng })}
+                onSelectApt={handleSelectApt}
+                favApts={favApts}
+                addFavoriteApt={addFavoriteApt}
+                removeFavoriteApt={removeFavoriteApt}
+                onOpenChartPanel={() => togglePanel('chart')}
+                isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
+              />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} />
+            </div>
+          </div>
+        </div>
       )}
 
-      {/* LeftPanel 드로어 — 모든 해상도에서 절대위치 오버레이 */}
-      <div style={{
-        position: 'absolute', top: 0, bottom: isMobile ? 64 : 0, left: 0,
-        width: leftPanelWidth,
-        transform: isLeftPanelOpen ? 'translateX(0)' : 'translateX(-100%)',
-        transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
-        zIndex: 4,
-        boxShadow: isLeftPanelOpen ? '4px 0 24px rgba(0,0,0,0.12)' : 'none',
-      }}>
-        <LeftPanel
-          selectedApt={selectedApt}
-          onPanTo={(lat, lng) => setMapCenter({ lat, lng })}
-          onSelectApt={handleSelectApt}
-          favApts={favApts}
-          addFavoriteApt={addFavoriteApt}
-          removeFavoriteApt={removeFavoriteApt}
-          onClose={() => setIsLeftPanelOpen(false)}
-          onOpenChartPanel={() => togglePanel('chart')}
-          isMobile={isMobile}
-          isTablet={isTablet}
-          isDesktop={isDesktop}
-        />
-      </div>
-
-      {/* 지도 영역 */}
+      {/* ── 지도 영역 ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <Mainmap
           mapCenter={mapCenter}
@@ -147,10 +180,10 @@ function App() {
           onSelectApt={handleSelectApt}
         />
 
-        {/* 데스크탑: 사이드 토글 탭 */}
+        {/* 데스크탑: 사이드바 토글 탭 */}
         {isDesktop && (
           <button
-            onClick={() => setIsLeftPanelOpen(p => !p)}
+            onClick={() => togglePanel(openPanel ?? 'info')}
             style={{
               position: 'absolute', top: '50%', left: 0,
               transform: 'translateY(-50%)',
@@ -162,9 +195,9 @@ function App() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: '2px 0 8px rgba(0,0,0,0.08)', padding: 0,
             }}
-            title={isLeftPanelOpen ? '패널 닫기' : '패널 열기'}
+            title={sidebarOpen ? '패널 닫기' : '패널 열기'}
           >
-            {isLeftPanelOpen ? '◀' : '▶'}
+            {sidebarOpen ? '◀' : '▶'}
           </button>
         )}
 
@@ -185,8 +218,9 @@ function App() {
                     width: 56, height: 56, borderRadius: '50%',
                     backgroundColor: active ? '#E6DED4' : '#fff',
                     border: active ? '2px solid #6B625B' : '1px solid #C9BFB4',
-                    fontSize: '1.4rem', cursor: 'pointer',
+                    cursor: 'pointer',
                     boxShadow: '0 2px 8px rgba(0,0,0,0.10)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                   title={btn.label}
                   aria-pressed={active}
@@ -198,75 +232,69 @@ function App() {
           </div>
         )}
 
-        {/* 오버레이 백드롭 */}
-        {openPanel && (
-          <div
-            onClick={closePanel}
-            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.18)', zIndex: 4 }}
-            aria-hidden
-          />
+        {/* 모바일·태블릿: 백드롭 */}
+        {!isDesktop && openPanel && (
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.18)', zIndex: 4 }} aria-hidden />
         )}
 
-        {/* 오버레이 패널 컨테이너 — 모바일·태블릿: 바텀시트 / 데스크탑: 센터 오버레이 */}
-        <div
-          style={isBottomSheet ? {
-            position: 'absolute',
-            bottom: isMobile ? 64 : 0,
-            left: 0, right: 0,
-            height: isMobile ? 'calc(100vh - 128px)' : 'calc(100vh - 16px)',
-            borderRadius: '20px 20px 0 0',
-            transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
-            transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
-            pointerEvents: openPanel ? 'auto' : 'none',
-            background: '#fff',
-            boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            zIndex: 5,
-          } : {
-            position: 'absolute',
-            top: 0, bottom: 0,
-            left: '50%',
-            transform: openPanel ? 'translateX(-50%)' : 'translateX(200%)',
-            width: 'min(740px, 88vw)',
-            transition: 'transform 0.25s ease',
-            background: '#fff',
-            boxShadow: openPanel ? '0 0 24px rgba(0,0,0,0.10)' : 'none',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-            zIndex: 5,
-            borderRadius: 14,
-          }}
-          aria-hidden={!openPanel}
-        >
-          {/* 바텀시트 핸들 (모바일·태블릿) */}
-          {isBottomSheet && (
-            <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'center', paddingTop: 10, paddingBottom: 2 }}>
-              <div style={{ width: 40, height: 4, borderRadius: 99, background: '#E6DED4' }} />
-            </div>
-          )}
+        {/* 모바일·태블릿: 바텀시트 컨테이너 */}
+        {!isDesktop && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 0,
+              left: 0, right: 0,
+              height: isMobile ? 'calc(100vh - 120px - env(safe-area-inset-bottom, 0px))' : 'calc(100vh - 16px)',
+              borderRadius: '20px 20px 0 0',
+              transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
+              transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
+              pointerEvents: openPanel ? 'auto' : 'none',
+              background: '#fff',
+              boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+              zIndex: 5,
+            }}
+            aria-hidden={!openPanel}
+          >
+            {/* 핸들형 닫기 버튼 */}
+            <button
+              onClick={closePanel}
+              style={{
+                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                gap: 8, width: '100%', padding: '12px 0 8px',
+                border: 'none', background: 'none', cursor: 'pointer',
+              }}
+              aria-label="닫기"
+            >
+              <div style={{ width: 32, height: 3, borderRadius: 99, background: '#D5CCC4' }} />
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#C9BFB4', letterSpacing: '0.05em' }}>닫기</span>
+              <div style={{ width: 32, height: 3, borderRadius: 99, background: '#D5CCC4' }} />
+            </button>
 
-          {/* 각 패널 — 동일한 flex:1 래퍼로 통일. 스크롤은 각 패널 내부에서 처리 */}
-          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <Login onClose={closePanel} />
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'info'  ? 'flex' : 'none', flexDirection: 'column' }}>
+              <LeftPanel
+                selectedApt={selectedApt}
+                onPanTo={(lat, lng) => setMapCenter({ lat, lng })}
+                onSelectApt={handleSelectApt}
+                favApts={favApts}
+                addFavoriteApt={addFavoriteApt}
+                removeFavoriteApt={removeFavoriteApt}
+                onOpenChartPanel={() => togglePanel('chart')}
+                isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
+              />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} />
+            </div>
+            <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
+              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} />
+            </div>
           </div>
-          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <BoardPanel onClose={closePanel} backHandlerRef={boardBackHandlerRef} />
-          </div>
-          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <ChartPanel
-              isOpen={openPanel === 'chart'}
-              favApts={favApts}
-              removeFavoriteApt={removeFavoriteApt}
-              onClose={closePanel}
-              isMobile={isMobile}
-              isTablet={isTablet}
-              isDesktop={isDesktop}
-            />
-          </div>
-        </div>
+        )}
       </div>
 
       {/* 모바일 하단 네비게이션 바 */}
@@ -274,28 +302,14 @@ function App() {
         <div style={{
           position: 'absolute',
           bottom: 0, left: 0, right: 0,
-          height: 64,
+          height: 'calc(56px + env(safe-area-inset-bottom, 0px))',
           background: '#fff',
-          borderTop: '1.5px solid #E6DED4',
-          display: 'flex',
-          alignItems: 'stretch',
+          borderTop: '1px solid #EBEBEB',
+          display: 'flex', alignItems: 'flex-start',
+          paddingBottom: 'env(safe-area-inset-bottom, 0px)',
           zIndex: 11,
-          boxShadow: '0 -2px 12px rgba(0,0,0,0.07)',
+          boxShadow: '0 -1px 0 rgba(0,0,0,0.06)',
         }}>
-          {/* 패널 열기 버튼 */}
-          <button
-            onClick={() => { setOpenPanel(null); setIsLeftPanelOpen(p => !p); }}
-            style={{
-              flex: 1, border: 'none', background: 'none', cursor: 'pointer',
-              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-              gap: 3, fontSize: '0.65rem', fontWeight: 700,
-              color: isLeftPanelOpen ? '#6B625B' : '#C9BFB4',
-            }}
-          >
-            <span style={{ fontSize: '1.3rem' }}>🏠</span>
-            <span>정보</span>
-          </button>
-
           {panelButtons.map(btn => {
             const active = openPanel === btn.key;
             return (
@@ -305,13 +319,14 @@ function App() {
                 style={{
                   flex: 1, border: 'none', background: 'none', cursor: 'pointer',
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  gap: 3, fontSize: '0.65rem', fontWeight: 700,
-                  color: active ? '#6B625B' : '#C9BFB4',
-                  borderTop: active ? '2px solid #6B625B' : '2px solid transparent',
+                  gap: 4, height: 56, padding: 0,
+                  color: active ? '#C9A84C' : '#BBBBBB',
+                  fontWeight: active ? 500 : 400,
+                  fontSize: '10px',
                 }}
                 aria-pressed={active}
               >
-                <span style={{ fontSize: '1.3rem' }}>{btn.icon}</span>
+                {btn.icon}
                 <span>{btn.label}</span>
               </button>
             );

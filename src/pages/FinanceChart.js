@@ -3,7 +3,7 @@
 // 그래프1: 자산 1~2개 선택, Y1/Y2 이중축
 // 그래프2: 정규화(%) 비교
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { createChart, LineSeries } from 'lightweight-charts';
 
 // ────────────────────────────────────────────
@@ -12,6 +12,7 @@ import { createChart, LineSeries } from 'lightweight-charts';
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
   : '';
+const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
 
 const ASSETS = [
   { key: 'SP500',  label: 'S&P500',  color: '#C1614E',
@@ -58,7 +59,7 @@ async function fetchFinanceData(assetKey) {
 
   const enc = (s) => encodeURIComponent(s);
   const tasks = years.map((y) => {
-    const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv`)}`;
+    const csvUrl = `${R2_BASE}/finance_data/${enc(`finance_${assetKey}_${y}.csv${CSV_SUFFIX}`)}`;
     return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
       if (!r.ok) return [];
       const text = await r.text();
@@ -248,8 +249,10 @@ function PriceChart({ selected, currency, yearWindow, isMobile }) {
       leftPriceScale: { visible: mixedTypes, borderColor: '#E6DED4', scaleMargins: { top: 0.08, bottom: 0.08 } },
     });
 
+    let cancelled = false;
     Promise.allSettled(keys.map(k => fetchFinanceData(k)))
       .then((results) => {
+        if (cancelled) return;
         const priceFormatter = (v) => {
           if (v >= 1_000_000_000) return Math.round(v / 1_000_000_000) + 'B';
           if (v >= 1_000_000)     return Math.round(v / 1_000_000) + 'M';
@@ -296,7 +299,8 @@ function PriceChart({ selected, currency, yearWindow, isMobile }) {
           }
         });
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [selected, currency, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sym = currency === 'KRW' ? '₩' : '$';
@@ -426,8 +430,10 @@ function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobil
     // 기준 날짜: 오늘로부터 normMonthsAgo개월 전
     const baseDateStr = monthsAgo(normMonthsAgo);
 
+    let cancelled = false;
     Promise.allSettled(selected.map(k => fetchFinanceData(k)))
       .then((results) => {
+        if (cancelled) return;
         const newSeries = [];
 
         results.forEach((result, idx) => {
@@ -496,8 +502,9 @@ function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobil
           }
         });
       })
-      .catch(() => setErrMsg('데이터 로드 실패'))
-      .finally(() => setLoading(false));
+      .catch(() => { if (!cancelled) setErrMsg('데이터 로드 실패'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, [selected, currency, yearWindow, normMonthsAgo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 아파트 시리즈 갱신 (aptX/aptAvg/normMonthsAgo 변경 시)
@@ -648,7 +655,7 @@ function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobil
 // ────────────────────────────────────────────
 export default function FinanceChart({ isMobile = false, aptX = [], aptAvg = [], aptName = null, onOpenChartPanel }) {
   const [slots, setSlots] = useState(['BTC', 'SP500', null]); // 3칸 고정, null = 빈 슬롯
-  const selected = slots.filter(Boolean);
+  const selected = useMemo(() => slots.filter(Boolean), [slots]);
   const [currency, setCurrency] = useState('KRW');
   const [yearWindow, setYearWindow] = useState(5);
   const [normMonthsAgo, setNormMonthsAgo] = useState(36); // 기본: 36개월(3년) 전 = 100%

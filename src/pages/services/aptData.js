@@ -5,10 +5,14 @@ import { parseCSV } from '../../utils/csvUtils';
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
   : "";
-const workbookCache = new Map(); // code5 -> { wb, url }  (Rdata)
-const pdataCache   = new Map(); // code5 -> { wb, url }  (Pdata)
-const tradeCache   = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
-let code5MapCache  = null;
+const CSV_SUFFIX = process.env.NODE_ENV === 'production' ? '.gz' : '';
+
+const workbookCache  = new Map(); // code5 -> { wb, url }  (Rdata)
+const pdataCache     = new Map(); // code5 -> { wb, url }  (Pdata)
+const tradeCache     = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
+const kaptListCache  = new Map(); // url -> rows[]  (KaptList CSV)
+const geocodeCache   = new Map(); // "lat2,lng2" -> url
+let code5MapCache    = null;
 
 async function loadCode5Map() {
   if (code5MapCache) return code5MapCache;
@@ -17,6 +21,57 @@ async function loadCode5Map() {
     if (r.ok) code5MapCache = await r.json();
   } catch { /* 로드 실패 시 null 유지 */ }
   return code5MapCache;
+}
+
+// code5 → KaptList CSV URL 생성
+export async function kaptListUrlByCode5(s1, s2, code5) {
+  const map = await loadCode5Map();
+  if (map?.[code5]) return `${R2_BASE}/KaptList/${map[code5]}${CSV_SUFFIX}`;
+  if (s2) return `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv${CSV_SUFFIX}`;
+  return `${R2_BASE}/KaptList/${s1}_${code5}_list_coord.csv${CSV_SUFFIX}`;
+}
+
+// 좌표 → KaptList CSV URL (역지오코딩, 카카오 SDK 필요)
+export function kaptListUrlByCoord(lat, lng) {
+  const cacheKey = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  if (geocodeCache.has(cacheKey)) return Promise.resolve(geocodeCache.get(cacheKey));
+
+  return new Promise((resolve) => {
+    const geocoder = new window.kakao.maps.services.Geocoder();
+    geocoder.coord2RegionCode(lng, lat, async (res, status) => {
+      const fallback = `${R2_BASE}/KaptList/서울특별시_송파구_11710_list_coord.csv${CSV_SUFFIX}`;
+      if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
+        geocodeCache.set(cacheKey, fallback);
+        resolve(fallback);
+        return;
+      }
+      const b = res.find(r => r.region_type === 'B') || res[0];
+      const code5 = (b.code || '').slice(0, 5) || '11710';
+      const s1 = b.region_1depth_name || '서울특별시';
+      const s2 = b.region_2depth_name || '송파구';
+      const url = await kaptListUrlByCode5(s1, s2, code5);
+      geocodeCache.set(cacheKey, url);
+      resolve(url);
+    });
+  });
+}
+
+// KaptList CSV 로드 (캐시 우선, 위도/경도 숫자화)
+export async function fetchKaptListRows(url) {
+  if (kaptListCache.has(url)) return kaptListCache.get(url);
+  try {
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) return [];
+    const rows = parseCSV(await res.text()).map(row => ({
+      ...row,
+      위도: parseFloat(row['위도']),
+      경도: parseFloat(row['경도']),
+    }));
+    kaptListCache.set(url, rows);
+    return rows;
+  } catch {
+    return [];
+  }
 }
 
 // code5_map.json 파일명에서 시군구 부분 추출 (예: "경기도_화성시_동탄구_41597_list_coord.csv" → "화성시_동탄구")
@@ -108,6 +163,25 @@ export function buildPNU(row) {
   }
 }
 
+// rows 배열로 pnuIndex, nameIndex 생성
+function buildIndexes(rows) {
+  const pnuIndex  = new Map(); // pnu(string) → row[]
+  const nameIndex = new Map(); // normAptNm   → row[]
+  for (const obj of rows) {
+    const pnu = String(obj.pnu || '').trim();
+    if (pnu) {
+      if (!pnuIndex.has(pnu)) pnuIndex.set(pnu, []);
+      pnuIndex.get(pnu).push(obj);
+    }
+    const nm = normAptNm(obj.aptNm);
+    if (nm) {
+      if (!nameIndex.has(nm)) nameIndex.set(nm, []);
+      nameIndex.get(nm).push(obj);
+    }
+  }
+  return { pnuIndex, nameIndex };
+}
+
 // index.json → 연도별 CSV 병렬 로드 (공통 로직)
 async function fetchIndexedCsvs(folder, candidates) {
   let lastErr = null;
@@ -123,7 +197,7 @@ async function fetchIndexedCsvs(folder, candidates) {
 
       const prefix = name.replace(/_index\.json$/i, '');
       const tasks = years.map((y) => {
-        const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv`)}`;
+        const csvUrl = `${R2_BASE}/${folder}/${enc(`${prefix}_${y}.csv${CSV_SUFFIX}`)}`;
         return fetch(csvUrl, { cache: 'no-store' }).then(async (r) => {
           if (!r.ok) throw new Error(`CSV HTTP ${r.status}`);
           return parseCSV(await r.text(), false);
@@ -131,7 +205,7 @@ async function fetchIndexedCsvs(folder, candidates) {
       });
 
       const wb = (await Promise.all(tasks)).flat();
-      return { wb, url };
+      return { wb, url, ...buildIndexes(wb) };
     } catch (e) {
       lastErr = e?.message || 'fetch 실패';
     }
@@ -247,7 +321,7 @@ function centeredSMA(arr, w) {
   });
 }
 
-export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, areaNorm, areaTol = null, smoothWindow = 3 }) {
+export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, areaNorm, areaTol = null, smoothWindow = 3, pnuIndex = null, nameIndex = null, pdNameIndex = null }) {
   const tol = areaTol ?? areaTolFor(areaNorm);
   const cacheKey = `${pnu}#${areaNorm}#${pdWb ? '1' : '0'}#${smoothWindow}`;
   if (tradeCache.has(cacheKey)) return tradeCache.get(cacheKey);
@@ -267,12 +341,24 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   const pnuStr = pnu ? String(pnu) : null;
   const rNormName = kaptName ? normAptNm(kaptName) : null;
 
+  // 인덱스로 후보 rows 추출 (없으면 전체 스캔 폴백)
+  let rCandidates;
+  if (pnuIndex || nameIndex) {
+    const byPnu  = (pnuStr && pnuIndex?.get(pnuStr))     || [];
+    const byName = (rNormName && nameIndex?.get(rNormName)) || [];
+    rCandidates = byPnu.length && byName.length
+      ? [...new Set([...byPnu, ...byName])]
+      : byPnu.length ? byPnu : byName.length ? byName : (wb || []);
+  } else {
+    rCandidates = wb || [];
+  }
+
   // PNU 매칭 중 aptNm이 다른 행 → 재건축 여부 판별
   const rPnuDiffRows = (pnuStr && rNormName)
-    ? (wb || []).filter(obj => String(obj.pnu).trim() === pnuStr && normAptNm(obj.aptNm) !== rNormName)
+    ? rCandidates.filter(obj => String(obj.pnu).trim() === pnuStr && normAptNm(obj.aptNm) !== rNormName)
     : [];
   const pdNameRows = (pdWb && rNormName)
-    ? pdWb.filter(obj => toNum(obj.isCanceled) !== 1 && normAptNm(obj.aptNm) === rNormName)
+    ? (pdNameIndex?.get(rNormName) || pdWb.filter(obj => toNum(obj.isCanceled) !== 1 && normAptNm(obj.aptNm) === rNormName))
     : [];
   const dropRdataDiffPnu = shouldDropRdataDiffPnu(rPnuDiffRows, pdNameRows);
 
@@ -280,13 +366,13 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   const rMatches = (obj) => {
     if (rNormName && normAptNm(obj.aptNm) === rNormName) return true;
     if (pnuStr && String(obj.pnu).trim() === pnuStr) {
-      if (dropRdataDiffPnu) return false; // 구 단지 데이터 drop
+      if (dropRdataDiffPnu) return false;
       return true;
     }
     return false;
   };
 
-  for (const obj of (wb || [])) {
+  for (const obj of rCandidates) {
     if (!rMatches(obj)) continue;
 
     const ar = toNum(obj.excluUseAr);
@@ -316,12 +402,14 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
 
   if (pdWb && kaptName) {
     const targetNorm = normAptNm(kaptName);
+    // pdNameIndex 있으면 O(1) 조회, 없으면 전체 스캔 폴백
+    const pdCandidates = pdNameIndex?.get(targetNorm) ?? pdWb;
 
-    for (const obj of pdWb) {
+    for (const obj of pdCandidates) {
       // 취소된 거래 제외
       if (toNum(obj.isCanceled) === 1) continue;
 
-      // 아파트명 매칭 (공백 제거 + '아파트' suffix 제거 후 비교)
+      // 아파트명 매칭
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
 
       const ar = toNum(obj.excluUseAr);
@@ -366,6 +454,7 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   const x = [];
   const vol = new Array(nMonths).fill(0);
   const avg = new Array(nMonths).fill(NaN);
+  const realMask = new Array(nMonths).fill(false); // true = 실거래 데이터 있음
 
   for (let i = 0; i < nMonths; i++) {
     const ym = dateToYM(addMonths(start, i));
@@ -374,6 +463,7 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     if (rec) {
       vol[i] = rec.vol;
       avg[i] = rec.amounts.reduce((a, b) => a + b, 0) / rec.amounts.length / 10000;
+      realMask[i] = true;
     }
   }
 
@@ -404,7 +494,7 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     for (let i = nMonths - 1; i >= 0 && !Number.isFinite(avg[i]); i--) avg[i] = lastVal;
   }
 
-  const res = { x, vol, avg, ptsX: rPtsX, ptsY: rPtsY, pPtsX, pPtsY };
+  const res = { x, vol, avg, realMask, ptsX: rPtsX, ptsY: rPtsY, pPtsX, pPtsY };
   tradeCache.set(cacheKey, res);
   return res;
 }
