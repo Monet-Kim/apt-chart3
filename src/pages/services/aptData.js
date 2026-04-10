@@ -167,8 +167,6 @@ export async function fetchWorkbook(as1, as2, code5) {
     `Rdata_${S1}_${S2}_${code5}_index.json`,
     ...(altS2 && altS2 !== S2 ? [`Rdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Rdata_${S1}_${code5}_index.json`,
-    `Rdata_${S1}_${S2}_${S2}_${code5}_index.json`,
-    `Rdata_${code5}_index.json`,
   ];
   const ret = await fetchIndexedCsvs('Rdata', candidates);
   workbookCache.set(code5, ret);
@@ -184,8 +182,6 @@ export async function fetchPdata(as1, as2, code5) {
     `Pdata_${S1}_${S2}_${code5}_index.json`,
     ...(altS2 && altS2 !== S2 ? [`Pdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Pdata_${S1}_${code5}_index.json`,
-    `Pdata_${S1}_${S2}_${S2}_${code5}_index.json`,
-    `Pdata_${code5}_index.json`,
   ];
   const ret = await fetchIndexedCsvs('Pdata', candidates);
   pdataCache.set(code5, ret);

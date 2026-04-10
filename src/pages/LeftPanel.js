@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
 import { trimAptName } from '../utils/aptNameUtils';
-import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
@@ -33,17 +32,15 @@ const hotKeyframes = `
   75%  { transform:  scale(1); }
   100% { transform:  scale(1);   }
 }
-@keyframes favFloat {
-  0%   { opacity: 1; transform: translateY(0px);   }
-  100% { opacity: 0; transform: translateY(-80px); }
-}
 @keyframes favHighlightBg {
-  0%   { background: #b35a00; }
+  0%   { background: #C9A84C40; }
+  40%  { background: #C9A84C28; }
   100% { background: transparent; }
 }
 @keyframes favHighlightText {
-  0%   { color: #ffffff; }
-  100% { color: inherit; }
+  0%   { color: #8a6200; }
+  40%  { color: #8a6200; }
+  100% { color: #888780; }
 }
 `;
 if (typeof document !== 'undefined') {
@@ -79,12 +76,16 @@ function makeChartOptions(height) {
       borderColor: '#E6DED4',
       timeVisible: true,
       secondsVisible: false,
-      minBarSpacing: 0.1,
-      tickMarkFormatter: (time) => {
+      minBarSpacing: 1,
+      tickMarkFormatter: (time, tickMarkType) => {
         const d = typeof time === 'object'
           ? new Date(time.year, time.month - 1, time.day)
           : new Date(time);
-        return String(d.getFullYear());
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        if (tickMarkType >= 2) return `${yyyy}/${mm}/${dd}`;
+        return `${yyyy}/${mm}`;
       },
     },
     localization: {
@@ -111,7 +112,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
   const avgSeriesRef = useRef(null);
   const svgRef       = useRef(null);
 
-  const chartHeight = isMobile ? 200 : 240;
+  const [chartHeight, setChartHeight] = useState(isMobile ? 200 : 240);
 
   // x: ["2020-01", ...] → "YYYY-MM-01" 형태로 변환
   function toTime(ym) {
@@ -177,6 +178,11 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
     if (pPtsX?.length) drawDots(pPtsX, pPtsY, 'triangle');
   };
 
+  // chartHeight 변경 시 차트에 반영
+  useEffect(() => {
+    chartRef.current?.applyOptions({ height: chartHeight });
+  }, [chartHeight]);
+
   // 차트 초기화
   useEffect(() => {
     if (!containerRef.current) return;
@@ -230,7 +236,9 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
 
     // ResizeObserver
     const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: containerRef.current?.clientWidth });
+      const w = containerRef.current?.clientWidth || 0;
+      chart.applyOptions({ width: w });
+      setChartHeight(Math.max(160, Math.round(w * 0.5)));
       redrawDotsRef.current?.();
     });
     ro.observe(containerRef.current);
@@ -327,8 +335,6 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [searchInput, setSearchInput] = useState('');
   const [suggestions, setSuggestions] = useState([]);
 
-  // 전용면적 드래그 스크롤
-  const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: endAreaDrag, onTouchStart: onAreaTouchStart, onTouchMove: onAreaTouchMove, onTouchEnd: endAreaTouchDrag } = useAreaDragScroll();
 
   // 선택 아파트 관련 상태
   const [pnu, setPnu] = useState(null);
@@ -336,6 +342,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [showInfo, setShowInfo] = useState(false);
   const [favToast, setFavToast] = useState(null); // { type: 'added'|'removed', x, y, key }
   const favBtnRef  = useRef(null);
+  const chartHeaderRef = useRef(null); // AptTradeChart 범례 높이 감지용
   const [areas, setAreas] = useState([]);
   const [selArea, setSelArea] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
@@ -643,7 +650,8 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
     return `${Math.min(...areas).toFixed(1)}~${Math.max(...areas).toFixed(1)}㎡`;
   }, [areas]);
 
-  const padding = isMobile ? '14px 16px' : isTablet ? '16px 20px' : '20px 24px';
+  const isCompact = isMobile || isTablet;
+  const padding = isCompact ? '16px 20px' : '20px 24px';
 
   return (
     <aside style={{ ...commonPanelStyle, borderRight: '1.5px solid #E6DED4' }}>
@@ -705,20 +713,6 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                 />
               </svg>
             </button>
-            {favToast && (
-              <span style={{
-                position: 'fixed',
-                left: favToast.x -90,
-                top: favToast.y -55,
-                transform: 'translateX(-50%)',
-                color: '#b35a00', fontSize: '0.8rem', fontWeight: 900,
-                whiteSpace: 'nowrap', pointerEvents: 'none',
-                zIndex: 9999,
-                animation: 'favFloat 2s linear forwards',
-              }}>
-                {favToast.type === 'added' ? '즐겨찾기 추가' : '즐겨찾기 해제'}
-              </span>
-            )}
           </div>
         )}
 
@@ -818,7 +812,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       {/* ── 콘텐츠 영역 ── */}
       <div style={{
         flex: 1,
-        overflowY: isMobile ? 'scroll' : 'auto',
+        overflowY: 'auto',
         display: 'flex', flexDirection: 'column', gap: 14,
         padding,
         boxSizing: 'border-box',
@@ -828,74 +822,52 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
       {/* ── 면적선택 영역 ── */}
       {selectedApt && (
-        <div style={{
-          flexShrink: 0,
-          marginLeft: isMobile ? -16 : isTablet ? -20 : -24,
-          paddingLeft: isMobile ? 16 : isTablet ? 20 : 24,
-        }}>
-          <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4 }}>
-            전용면적 선택 {areaRangeText && <span>{areaRangeText}</span>}
-          </div>
-          <div
-            ref={areaScrollRef}
-            className="area-tab-scroll"
-            onMouseDown={onAreaMouseDown}
-            onMouseMove={onAreaMouseMove}
-            onMouseUp={endAreaDrag}
-            onMouseLeave={endAreaDrag}
-            onTouchStart={onAreaTouchStart}
-            onTouchMove={onAreaTouchMove}
-            onTouchEnd={endAreaTouchDrag}
-            style={{
-              display: 'flex', gap: 0,
-              overflowX: 'auto', overflowY: 'visible',
-              borderBottom: '1px solid #E6DED4',
-              WebkitOverflowScrolling: 'touch',
-              scrollbarWidth: 'thin',
-              scrollbarColor: '#D3D1C7 transparent',
-              cursor: dragRef.current?.down ? 'grabbing' : 'grab',
-              userSelect: 'none', touchAction: 'pan-x',
-              paddingBottom: 4,
-            }}
-          >
-            {areas.map((a) => {
-              const active  = selArea === a;
-              const hotRank = hotAreas.indexOf(a);
-              const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
-              return (
-                <div
-                  key={a}
-                  onClick={() => handleAreaClick(a)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onTouchStart={(e) => e.stopPropagation()}
-                  style={{
-                    flex: '0 0 auto',
-                    padding: '6px 10px',
-                    fontSize: '0.78rem',
-                    fontWeight: active ? 700 : 400,
-                    color: active ? '#1F1D1B' : '#888780',
-                    borderBottom: active ? '2px solid #1F1D1B' : '2px solid transparent',
-                    marginBottom: -1,
-                    cursor: 'pointer',
-                    position: 'relative',
-                    whiteSpace: 'nowrap',
-                    transition: 'color 0.1s',
-                  }}
-                >
-                  {a.toFixed(1)}㎡
-                  {hotLabel && (
-                    <span style={{
-                      position: 'absolute', top: 0, right: 2,
-                      color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
-                      pointerEvents: 'none', transform: 'rotate(-12deg)',
-                      transformOrigin: 'center center', lineHeight: 1,
-                    }}>
-                      {hotLabel}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+        <div style={{ flexShrink: 0, padding: '0 2px' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+            {/* 노란 세로 바 */}
+            <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: '#C9BFB4' }} />
+                전용면적 선택 {areaRangeText && <span>{areaRangeText}</span>}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0 }}>
+                {areas.map((a) => {
+                  const active  = selArea === a;
+                  const hotRank = hotAreas.indexOf(a);
+                  const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
+                  return (
+                    <div
+                      key={a}
+                      onClick={() => handleAreaClick(a)}
+                      style={{
+                        padding: '6px 10px',
+                        fontSize: '0.78rem',
+                        fontWeight: active ? 700 : 400,
+                        color: active ? '#1F1D1B' : '#888780',
+                        borderBottom: active ? '2px solid #1F1D1B' : '2px solid transparent',
+                        cursor: 'pointer',
+                        position: 'relative',
+                        whiteSpace: 'nowrap',
+                        transition: 'color 0.1s',
+                      }}
+                    >
+                      {a.toFixed(1)}㎡
+                      {hotLabel && (
+                        <span style={{
+                          position: 'absolute', top: 0, right: 2,
+                          color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
+                          pointerEvents: 'none', transform: 'rotate(-12deg)',
+                          transformOrigin: 'center center', lineHeight: 1,
+                        }}>
+                          {hotLabel}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -925,7 +897,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
             {/* 범례 — 데이터 있을 때만 */}
             {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
-              <div style={{ display: 'flex', gap: 12, padding: '2px 10px 6px', flexWrap: 'wrap', fontSize: '0.78rem', fontWeight: 800, color: '#1F1D1B' }}>
+              <div ref={chartHeaderRef} style={{ display: 'flex', gap: 12, padding: '2px 10px 6px', flexWrap: 'wrap', fontSize: '0.78rem', fontWeight: 800, color: '#1F1D1B' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 12, height: 12, background: 'rgba(196,154,42,0.35)', display: 'inline-block', borderRadius: 2 }} />
                   거래량
@@ -951,8 +923,8 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
               </div>
             )}
 
-            {/* 고정 높이 차트 영역 */}
-            <div style={{ height: isMobile ? 200 : 240, position: 'relative' }}>
+            {/* 차트 영역 — 높이는 AptTradeChart 내부에서 동적 관리 */}
+            <div style={{ position: 'relative' }}>
               {(loadingTrade || loadingInfo) && (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6B625B', fontSize: '0.85rem' }}>
                   로딩 중…
@@ -969,63 +941,63 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                   ptsX={ptsX} ptsY={ptsY}
                   pPtsX={pPtsX} pPtsY={pPtsY}
                   yearWindow={yearWindow}
-                  isMobile={isMobile}
+                  isMobile={false}
                 />
               )}
             </div>
           </>
         ) : (
           /* TODO: 광고 또는 공지 컴포넌트로 교체 */
-          <div style={{ height: isMobile ? 200 : 240, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: '#F7F3EE', color: '#C9BFB4', fontSize: '0.85rem' }}>
+          <div style={{ height: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: '#F7F3EE', color: '#C9BFB4', fontSize: '0.85rem' }}>
             지도에서 아파트를 클릭하면 거래 차트를 확인할 수 있어요
           </div>
         )}
-      </div>
 
-      {/* 즐겨찾기 단지 */}
-      {favApts.length > 0 && (
-        <div style={{ padding: '0 2px' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
-            {/* 노란 세로 바 */}
-            <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
-            {/* 아파트 목록 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
-              {favApts.map(fav => {
-                const isActive = fav.key === aptKey;
-                const isNew = favToast?.type === 'added' && favToast?.key === fav.key;
-                return (
-                  <div
-                    key={fav.key}
-                    onClick={() => onSelectApt?.(fav)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 4,
-                      padding: '3px 6px', cursor: 'pointer', borderRadius: 6,
-                      animation: isNew ? 'favHighlightBg 2s linear forwards' : 'none',
-                    }}
-                  >
-                    <div style={{
-                      width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                      background: isActive ? '#6B625B' : '#C9BFB4',
-                    }} />
-                    <span style={{
-                      fontSize: '0.72rem', fontWeight: isActive ? 700 : 400,
-                      color: isActive ? '#1F1D1B' : '#888780',
-                      whiteSpace: 'nowrap',
-                      animation: isNew ? 'favHighlightText 2s linear forwards' : 'none',
-                    }}>
-                      {trimAptName(fav.kaptName)}
-                    </span>
-                    <span
-                      onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
-                      style={{ fontSize: '0.6rem', color: '#C9BFB4', cursor: 'pointer', lineHeight: 1 }}
-                    >✕</span>
-                  </div>
-                );
-              })}
+        {/* 즐겨찾기 단지 */}
+        {favApts.length > 0 && (
+          <div style={{ padding: '4px 2px 0' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+              {/* 노란 세로 바 */}
+              <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
+              {/* 아파트 목록 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+                {favApts.map(fav => {
+                  const isActive = fav.key === aptKey;
+                  const isNew = favToast?.type === 'added' && favToast?.key === fav.key;
+                  return (
+                    <div
+                      key={fav.key}
+                      onClick={() => onSelectApt?.(fav)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 4,
+                        padding: '3px 6px', cursor: 'pointer', borderRadius: 6,
+                        animation: isNew ? 'favHighlightBg 2s ease-out forwards' : 'none',
+                      }}
+                    >
+                      <div style={{
+                        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                        background: isActive ? '#6B625B' : '#C9BFB4',
+                      }} />
+                      <span style={{
+                        fontSize: '0.72rem', fontWeight: isActive ? 700 : 400,
+                        color: isActive ? '#1F1D1B' : '#888780',
+                        whiteSpace: 'nowrap',
+                        animation: isNew ? 'favHighlightText 2s ease-out forwards' : 'none',
+                      }}>
+                        {trimAptName(fav.kaptName)}
+                      </span>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
+                        style={{ fontSize: '0.6rem', color: '#C9BFB4', cursor: 'pointer', lineHeight: 1 }}
+                      >✕</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <FinanceChart
         isMobile={isMobile}

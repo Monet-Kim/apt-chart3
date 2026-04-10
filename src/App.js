@@ -123,7 +123,7 @@ function App() {
   ];
 
   // 패널 너비: 모바일 전체, 태블릿 420px, 데스크탑 440px
-  const panelWidth = isMobile ? '100vw' : isTablet ? '420px' : '440px';
+  const panelWidth = isMobile ? '100vw' : isTablet ? '420px' : 'max(440px, min(520px, 42vw))';
 
   // 데스크탑: 사이드바가 열리면 지도 영역을 밀어냄
   const sidebarOpen = isDesktop && openPanel !== null;
@@ -180,52 +180,39 @@ function App() {
           onSelectApt={handleSelectApt}
         />
 
-        {/* 데스크탑: 사이드바 토글 탭 */}
+        {/* 데스크탑: 책갈피 탭 (사이드바 우측 벽에 부착) */}
         {isDesktop && (
-          <button
-            onClick={() => togglePanel(openPanel ?? 'info')}
-            style={{
-              position: 'absolute', top: '50%', left: 0,
-              transform: 'translateY(-50%)',
-              zIndex: 7, width: 22, height: 56,
-              border: '1px solid #E6DED4', borderLeft: 'none',
-              borderRadius: '0 8px 8px 0',
-              background: '#fff', cursor: 'pointer',
-              fontSize: '0.75rem', color: '#6B625B', fontWeight: 900,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '2px 0 8px rgba(0,0,0,0.08)', padding: 0,
-            }}
-            title={sidebarOpen ? '패널 닫기' : '패널 열기'}
-          >
-            {sidebarOpen ? '◀' : '▶'}
-          </button>
-        )}
-
-        {/* 데스크탑·태블릿: 오른쪽 플로팅 버튼 */}
-        {!isMobile && (
           <div style={{
-            position: 'absolute', top: '50%', right: 10,
-            transform: 'translateY(-50%)',
-            display: 'flex', flexDirection: 'column', gap: 8, zIndex: 6,
+            position: 'absolute', top: 0, left: 0,
+            display: 'flex', flexDirection: 'column',
+            zIndex: 7,
           }}>
-            {panelButtons.map(btn => {
+            {panelButtons.map((btn, i) => {
               const active = openPanel === btn.key;
               return (
                 <button
                   key={btn.key}
                   onClick={() => togglePanel(btn.key)}
                   style={{
-                    width: 56, height: 56, borderRadius: '50%',
-                    backgroundColor: active ? '#E6DED4' : '#fff',
-                    border: active ? '2px solid #6B625B' : '1px solid #C9BFB4',
+                    width: 48, height: 80,
+                    border: '1px solid #D5CCC4', borderLeft: 'none',
+                    borderRadius: '0 10px 10px 0',
+                    marginBottom: i < panelButtons.length - 1 ? 2 : 0,
+                    background: active ? '#fff' : 'rgba(240,236,232,0.88)',
                     cursor: 'pointer',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.10)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center', gap: 5,
+                    color: active ? '#C9A84C' : '#7A726D',
+                    fontWeight: active ? 600 : 400,
+                    boxShadow: '2px 0 8px rgba(0,0,0,0.10)',
+                    transition: 'background 0.15s',
+                    padding: 0,
                   }}
-                  title={btn.label}
                   aria-pressed={active}
+                  title={btn.label}
                 >
                   {btn.icon}
+                  <span style={{ fontSize: '10px', letterSpacing: '-0.01em' }}>{btn.label}</span>
                 </button>
               );
             })}
@@ -242,9 +229,9 @@ function App() {
           <div
             style={{
               position: 'absolute',
-              bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 0,
+              bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))',
               left: 0, right: 0,
-              height: isMobile ? 'calc(100vh - 120px - env(safe-area-inset-bottom, 0px))' : 'calc(100vh - 16px)',
+              height: 'calc(100vh - 120px - env(safe-area-inset-bottom, 0px))',
               borderRadius: '20px 20px 0 0',
               transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
               transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
@@ -297,8 +284,8 @@ function App() {
         )}
       </div>
 
-      {/* 모바일 하단 네비게이션 바 */}
-      {isMobile && (
+      {/* 모바일·태블릿 하단 네비게이션 바 */}
+      {!isDesktop && (
         <div style={{
           position: 'absolute',
           bottom: 0, left: 0, right: 0,

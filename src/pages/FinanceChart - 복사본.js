@@ -480,15 +480,17 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
 
     requestAnimationFrame(() => {
       if (!chartRef.current) return;
-      try {
-        chartRef.current.timeScale().setVisibleRange({ from: visibleStartDate, to: today });
-      } catch {
-        chartRef.current.timeScale().fitContent();
-      }
-      if (baseTimeRef.current) {
-        const x = chartRef.current.timeScale().timeToCoordinate(baseTimeRef.current);
-        setBaseLineX(x != null ? x : null);
-      }
+      chartRef.current.timeScale().fitContent();
+      requestAnimationFrame(() => {
+        if (!chartRef.current) return;
+        try {
+          chartRef.current.timeScale().setVisibleRange({ from: visibleStartDate, to: today });
+        } catch {}
+        if (baseTimeRef.current) {
+          const x = chartRef.current.timeScale().timeToCoordinate(baseTimeRef.current);
+          setBaseLineX(x != null ? x : null);
+        }
+      });
     });
   }, []); // refs만 사용 — 의존성 없음
 
@@ -635,7 +637,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
 
     const series = chart.addSeries(LineSeries, {
       color: 'rgba(196, 154, 42, 0.7)', //아파트 aptNm 실선 투명도 양식
-      lineWidth: 2,
+      lineWidth: 3,
       lineStyle: 0, // dashed
       priceScaleId: 'right',
       lastValueVisible: true,

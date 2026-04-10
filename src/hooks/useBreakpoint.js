@@ -11,8 +11,8 @@ export function useBreakpoint() {
 
   return {
     width,
-    isMobile: width < 768,
-    isTablet: width >= 768 && width < 1200,
-    isDesktop: width >= 1200,
+    isMobile: width < 720,
+    isTablet: width >= 720 && width < 850,
+    isDesktop: width >= 850,
   };
 }
