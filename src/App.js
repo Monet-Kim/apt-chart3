@@ -52,7 +52,6 @@ function App() {
   const [pendingPostContent, setPendingPostContent] = useState(null);
 
   const togglePanel = (key) => setOpenPanel(prev => prev === key ? null : key);
-  const closePanel  = () => setOpenPanel(null);
 
   // 데스크탑 초기 상태: 정보 패널 열림
   useEffect(() => {
@@ -244,46 +243,19 @@ function App() {
           </div>
         )}
 
-        {/* 모바일·태블릿: 백드롭 */}
+        {/* 모바일·태블릿: 풀스크린 패널 */}
         {!isDesktop && openPanel && (
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.18)', zIndex: 4 }} aria-hidden />
-        )}
-
-        {/* 모바일·태블릿: 바텀시트 컨테이너 */}
-        {!isDesktop && (
           <div
             style={{
               position: 'absolute',
+              top: 0, left: 0, right: 0,
               bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))',
-              left: 0, right: 0,
-              height: 'calc(100vh - 120px - env(safe-area-inset-bottom, 0px))',
-              borderRadius: '20px 20px 0 0',
-              transform: openPanel ? 'translateY(0)' : 'translateY(110%)',
-              transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
-              pointerEvents: openPanel ? 'auto' : 'none',
               background: '#fff',
-              boxShadow: '0 -4px 24px rgba(0,0,0,0.15)',
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
               zIndex: 5,
             }}
-            aria-hidden={!openPanel}
           >
-            {/* 핸들형 닫기 버튼 */}
-            <button
-              onClick={closePanel}
-              style={{
-                flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                gap: 8, width: '100%', padding: '12px 0 8px',
-                border: 'none', background: 'none', cursor: 'pointer',
-              }}
-              aria-label="닫기"
-            >
-              <div style={{ width: 32, height: 3, borderRadius: 99, background: '#D5CCC4' }} />
-              <span style={{ fontSize: '11px', fontWeight: 600, color: '#C9BFB4', letterSpacing: '0.05em' }}>닫기</span>
-              <div style={{ width: 32, height: 3, borderRadius: 99, background: '#D5CCC4' }} />
-            </button>
-
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'info'  ? 'flex' : 'none', flexDirection: 'column' }}>
               <LeftPanel
                 selectedApt={selectedApt}
