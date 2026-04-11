@@ -5,10 +5,12 @@ import { parseCSV } from '../../utils/csvUtils';
 const R2_BASE = process.env.NODE_ENV === 'production'
   ? "https://pub-8c65c427a291446c9384665be9201bea.r2.dev"
   : "";
-const workbookCache = new Map(); // code5 -> { wb, url }  (Rdata)
-const pdataCache   = new Map(); // code5 -> { wb, url }  (Pdata)
-const tradeCache   = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
-let code5MapCache  = null;
+const workbookCache  = new Map(); // code5 -> { wb, url }  (Rdata)
+const pdataCache     = new Map(); // code5 -> { wb, url }  (Pdata)
+const kaptDetailCache = new Map(); // code5 -> Map<kaptCode, row>
+const kaptListCache   = new Map(); // code5 -> Map<normAptNm, row>
+const tradeCache     = new Map(); // `${pnu}#${areaNorm}#${withP}#${sw}` -> result
+let code5MapCache    = null;
 
 async function loadCode5Map() {
   if (code5MapCache) return code5MapCache;
@@ -158,14 +160,24 @@ async function fetchIndexedCsvs(folder, candidates) {
   throw new Error(`${folder} index.json 미존재: ${lastErr || ''}`);
 }
 
+// code5_map.json에서 파일명 prefix 추출 (예: "충청남도_천안시_서북구_44133")
+async function getFilePrefix(code5) {
+  const map = await loadCode5Map();
+  const listFile = map?.[code5];
+  if (listFile && listFile.endsWith(`_${code5}_list_coord.csv`)) {
+    return listFile.replace(/_list_coord\.csv$/, '');
+  }
+  return null;
+}
+
 // Rdata 로드
 export async function fetchWorkbook(as1, as2, code5) {
   if (workbookCache.has(code5)) return workbookCache.get(code5);
+  const prefix = await getFilePrefix(code5);
   const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
-  const altS2 = await getAltS2(S1, code5);
   const candidates = [
+    ...(prefix ? [`Rdata_${prefix}_index.json`] : []),
     `Rdata_${S1}_${S2}_${code5}_index.json`,
-    ...(altS2 && altS2 !== S2 ? [`Rdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Rdata_${S1}_${code5}_index.json`,
   ];
   const ret = await fetchIndexedCsvs('Rdata', candidates);
@@ -173,14 +185,14 @@ export async function fetchWorkbook(as1, as2, code5) {
   return ret;
 }
 
-// Pdata 로드 (Rdata와 동일한 패턴, /Pdata/ 경로)
+// Pdata 로드
 export async function fetchPdata(as1, as2, code5) {
   if (pdataCache.has(code5)) return pdataCache.get(code5);
+  const prefix = await getFilePrefix(code5);
   const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
-  const altS2 = await getAltS2(S1, code5);
   const candidates = [
+    ...(prefix ? [`Pdata_${prefix}_index.json`] : []),
     `Pdata_${S1}_${S2}_${code5}_index.json`,
-    ...(altS2 && altS2 !== S2 ? [`Pdata_${S1}_${altS2}_${code5}_index.json`] : []),
     `Pdata_${S1}_${code5}_index.json`,
   ];
   const ret = await fetchIndexedCsvs('Pdata', candidates);
@@ -436,6 +448,68 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
   const res = { x, vol, avg, ptsX: rPtsX, ptsY: rPtsY, pPtsX, pPtsY };
   tradeCache.set(cacheKey, res);
   return res;
+}
+
+// KaptDetail CSV 로드: kaptCode → row Map 반환
+export async function fetchKaptDetail(as1, as2, code5) {
+  if (kaptDetailCache.has(code5)) return kaptDetailCache.get(code5);
+
+  // 1순위: code5_map.json으로 정확한 파일명 도출 (Depth2/3 무관)
+  const code5map = await loadCode5Map();
+  const listFile = code5map?.[code5];
+  const candidates = [];
+  if (listFile && listFile.endsWith(`_${code5}_list_coord.csv`)) {
+    candidates.push(listFile.replace(/_list_coord\.csv$/, '_Details.csv'));
+  }
+  // 2순위: as1_as2_code5 패턴 (code5_map.json 미등록 시 fallback)
+  const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
+  if (S1 && S2) candidates.push(`${S1}_${S2}_${code5}_Details.csv`);
+  let lastErr = null;
+  for (const name of candidates) {
+    const url = `${R2_BASE}/KaptDetail/${enc(name)}`;
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+      const rows = parseCSV(await res.text(), true);
+      const map = new Map();
+      for (const row of rows) {
+        const code = String(row['kaptCode'] || '').trim();
+        if (code) map.set(code, row);
+      }
+      kaptDetailCache.set(code5, map);
+      return map;
+    } catch (e) {
+      lastErr = e?.message || 'fetch 실패';
+    }
+  }
+  throw new Error(`KaptDetail 로드 실패 (${code5}): ${lastErr || ''}`);
+}
+
+// KaptList CSV 로드: normAptNm(kaptName) → row Map 반환
+export async function fetchKaptList(as1, as2, code5) {
+  if (kaptListCache.has(code5)) return kaptListCache.get(code5);
+  const S1 = (as1 || '').trim(), S2 = (as2 || '').trim();
+  const altS2 = await getAltS2(S1, code5);
+  const candidates = [
+    `${S1}_${S2}_${code5}_list_coord.csv`,
+    ...(altS2 && altS2 !== S2 ? [`${S1}_${altS2}_${code5}_list_coord.csv`] : []),
+  ];
+  for (const name of candidates) {
+    const url = `${R2_BASE}/KaptList/${enc(name)}`;
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const rows = parseCSV(await res.text(), true);
+      const map = new Map();
+      for (const row of rows) {
+        const code = String(row['kaptCode'] || '').trim();
+        if (code) map.set(code, row);
+      }
+      kaptListCache.set(code5, map);
+      return map;
+    } catch { /* 다음 후보로 */ }
+  }
+  throw new Error(`KaptList 로드 실패 (${code5})`);
 }
 
 // 85㎡에 가장 가까운 초기 선택

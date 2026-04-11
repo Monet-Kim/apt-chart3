@@ -84,12 +84,29 @@ function App() {
 
   // 즐겨찾기
   const [favApts, setFavApts] = useLocalStorage('fav_apts', []);
-  const addFavoriteApt = (row) => {
+  const addFavoriteApt = (row, areas = [], hotAreas = []) => {
     if (!row) return;
     const aptKey = `${row.kaptName}_${row.bjdCode || ''}`;
     const newFav = {
       key: aptKey, kaptName: row.kaptName, kaptAddr: row.kaptAddr,
-      bjdCode: row.bjdCode, as1: row.as1, as2: row.as2, as3: row.as3, as4: row.as4,
+      kaptCode: row.kaptCode, bjdCode: row.bjdCode, code5: String(row.bjdCode || '').slice(0, 5),
+      as1: row.as1, as2: row.as2, as3: row.as3, as4: row.as4,
+      kaptUsedate: row.kaptUsedate,
+      codeAptNm:   row.codeAptNm,
+      kaptdaCnt:   row.kaptdaCnt,
+      codeSaleNm:  row.codeSaleNm,
+      codeHeatNm:  row.codeHeatNm,
+      kaptAcompany: row.kaptAcompany,
+      kaptBcompany: row.kaptBcompany,
+      codeHallNm:  row.codeHallNm,
+      doroJuso:    row.doroJuso,
+      zipcode:     row.zipcode,
+      kaptTarea:   row.kaptTarea,
+      kaptDongCnt: row.kaptDongCnt,
+      kaptTopFloor:  row.kaptTopFloor,
+      kaptBaseFloor: row.kaptBaseFloor,
+      areas,
+      hotAreas,
     };
     setFavApts(prev => prev.some(a => a.key === aptKey) ? prev : [...prev, newFav]);
   };

@@ -26,7 +26,7 @@ function parseLine(line) {
  * @param {boolean} strict - true면 컬럼 수 불일치 행 스킵 (기본 true)
  */
 export function parseCSV(text, strict = true) {
-  const lines = text.replace(/\r/g, '').split('\n').filter(Boolean);
+  const lines = text.replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n').filter(Boolean);
   if (!lines.length) return [];
   const header = parseLine(lines[0]);
   const rows = [];

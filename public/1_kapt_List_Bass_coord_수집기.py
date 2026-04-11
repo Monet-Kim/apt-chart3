@@ -591,7 +591,13 @@ class CollectorWorker(QThread):
                 if key in existing and local_dt <= existing[key]:
                     skipped += 1; continue
                 self.s_prog1.emit(i, total_f, file_path.name)
-                s3.upload_file(str(file_path), R2_BUCKET, key)
+                extra = {}
+                if file_path.suffix == ".json":
+                    extra = {"ContentType": "application/json; charset=utf-8"}
+                elif file_path.suffix == ".csv":
+                    extra = {"ContentType": "text/csv; charset=utf-8"}
+                s3.upload_file(str(file_path), R2_BUCKET, key,
+                               ExtraArgs=extra if extra else None)
                 uploaded += 1
                 self.n_upload += 1
                 self.s_log.emit(f"  ↑ {file_path.name}", "data")

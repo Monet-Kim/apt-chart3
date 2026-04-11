@@ -5,7 +5,7 @@ import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
 import { trimAptName } from '../utils/aptNameUtils';
 import {
-  buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
+  buildPNU, fetchWorkbook, fetchPdata, fetchKaptDetail, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
 } from './services/aptData';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
@@ -340,6 +340,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [pnu, setPnu] = useState(null);
   const [pnuErr, setPnuErr] = useState(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [kaptDetailRow, setKaptDetailRow] = useState(null);
   const [favToast, setFavToast] = useState(null); // { type: 'added'|'removed', x, y, key }
   const favBtnRef  = useRef(null);
   const chartHeaderRef = useRef(null); // AptTradeChart 범례 높이 감지용
@@ -473,6 +474,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       pdNameIdxRef.current = null;
       setHotAreas([]);
       setTradeErr(null);
+      setKaptDetailRow(null);
       if (!selectedApt) return;
 
       const { pnu: _pnu } = buildPNU(selectedApt);
@@ -481,6 +483,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       const bjdCode = String(selectedApt['bjdCode'] || '').trim();
       const code5 = bjdCode.slice(0, 5);
       const as1 = selectedApt['as1'] || '', as2 = selectedApt['as2'] || '';
+
+      // KaptDetail 비동기 로드 (실패해도 무시)
+      fetchKaptDetail(as1, as2, code5)
+        .then(map => {
+          if (cancelled) return;
+          const kaptCode = String(selectedApt['kaptCode'] || '').trim();
+          setKaptDetailRow(map.get(kaptCode) ?? null);
+        })
+        .catch(() => {});
+
       setLoadingInfo(true);
       try {
         const [rResult, pResult] = await Promise.allSettled([
@@ -506,10 +518,11 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         setAreas(repAreas);
 
         // Hot 면적 집계
+        let hot1Area = null;
         {
           const cutoff = (() => {
             const d = new Date();
-            d.setFullYear(d.getFullYear() - 1);
+            d.setFullYear(d.getFullYear() - 3);
             return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
           })();
           const pnuStr = _pnu ? String(_pnu) : null;
@@ -546,9 +559,10 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
           const sorted = [...volMap.entries()].sort((a, b) => b[1] - a[1]);
           setHotAreas(sorted.slice(0, 2).map(([area]) => area));
+          hot1Area = sorted[0]?.[0] ?? null;
         }
 
-        const initArea = pickInitialArea(repAreas);
+        const initArea = hot1Area ?? pickInitialArea(repAreas);
         setSelArea(initArea);
 
         setLoadingTrade(true);
@@ -634,16 +648,90 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
   const infoPairs = useMemo(() => {
     if (!selectedApt) return [];
-    const pick = (k) => {
+    const pickList = (k) => {
       const v = selectedApt[k];
       return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
     };
+    const pickDetail = (k) => {
+      if (!kaptDetailRow) return null;
+      const v = kaptDetailRow[k];
+      return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
+    };
+    const fmtDate = (v) => {
+      if (!v || v.length !== 8) return v;
+      return `${v.slice(0, 4)}.${v.slice(4, 6)}.${v.slice(6, 8)}`;
+    };
+    const fmtArea = (v) => {
+      if (!v) return null;
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? `${n.toLocaleString()}㎡` : v;
+    };
+    const 총주차대수 = (() => {
+      const a = parseFloat(pickDetail('kaptdPcnt') || '');
+      const b = parseFloat(pickDetail('kaptdPcntu') || '');
+      if (!Number.isFinite(a) && !Number.isFinite(b)) return null;
+      const total = (Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0);
+      const units = parseFloat(pickList('kaptdaCnt') || '');
+      const perUnit = (Number.isFinite(units) && units > 0) ? (total / units).toFixed(1) : null;
+      return perUnit ? `${total} (세대당 ${perUnit})` : String(total);
+    })();
+    const 승강기수 = (() => {
+      const cnt = parseFloat(pickDetail('kaptdEcnt') || '');
+      if (!Number.isFinite(cnt)) return null;
+      const dong = parseFloat(pickList('kaptDongCnt') || '');
+      const perDong = (Number.isFinite(dong) && dong > 0) ? (cnt / dong).toFixed(1) : null;
+      return perDong ? `${cnt}대 (${perDong}/동)` : `${cnt}대`;
+    })();
+    const CCTV수 = (() => {
+      const cnt = parseFloat(pickDetail('kaptdCccnt') || '');
+      if (!Number.isFinite(cnt)) return null;
+      const area = parseFloat(pickList('kaptTarea') || '');
+      const per = (Number.isFinite(area) && area > 0) ? (cnt / area * 10000).toFixed(1) : null;
+      return per ? `${cnt} (1만㎡당 ${per}대)` : String(cnt);
+    })();
+    const 전기차충전기 = (() => {
+      const a = parseFloat(pickDetail('groundElChargerCnt') || '');
+      const b = parseFloat(pickDetail('undergroundElChargerCnt') || '');
+      if (!Number.isFinite(a) && !Number.isFinite(b)) return null;
+      return `${(Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0)}대`;
+    })();
+    const 전기용량 = (() => {
+      const cap = parseFloat(pickDetail('kaptdEcapa') || '');
+      if (!Number.isFinite(cap)) return null;
+      const units = parseFloat(pickList('kaptdaCnt') || '');
+      const perUnit = (Number.isFinite(units) && units > 0) ? (cap / units).toFixed(1) : null;
+      return perUnit ? `${cap.toLocaleString()} (세대당 ${perUnit}kW)` : cap.toLocaleString();
+    })();
     return [
-      ['세대', pick('kaptdaCnt')],
-      ['난방', pick('codeHeatNm')],
-      ['구조', pick('codeHallNm')],
-    ].filter(([, v]) => v);
-  }, [selectedApt]);
+      ['사용승인일',   fmtDate(pickList('kaptUsedate'))],
+      ['건물유형',     pickList('codeAptNm')],
+      ['세대수',       pickList('kaptdaCnt') ? `${String(pickList('kaptdaCnt')).replace(/\.0+$/, '')}세대` : null],
+      ['총주차대수',   총주차대수],
+      ['분양유형',     pickList('codeSaleNm')],
+      ['난방',         pickList('codeHeatNm')],
+      ['시행사',       pickList('kaptAcompany')],
+      ['시공사',       pickList('kaptBcompany')],
+      ['승강기수',     승강기수],
+      ['구조',         pickList('codeHallNm')],
+      ['CCTV수',       CCTV수],
+      ['전기차충전기', 전기차충전기],
+      ['주소(지번)',   (() => { const v = pickList('kaptAddr'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
+      ['주소(도로명)', (() => { const v = pickList('doroJuso'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
+      ['우편번호',     pickList('zipcode')],
+      ['단지면적',     fmtArea(pickList('kaptTarea'))],
+      ['동 수',        pickList('kaptDongCnt') ? `${pickList('kaptDongCnt')}동` : null],
+      ['최고층',       pickList('kaptTopFloor') ? `${pickList('kaptTopFloor')}층` : null],
+      ['지하층',       pickList('kaptBaseFloor') ? `${pickList('kaptBaseFloor')}층` : null],
+      ['관리직원수',   pickDetail('kaptMgrCnt') ? `${pickDetail('kaptMgrCnt')}명` : null],
+      ['관리회사',     pickDetail('kaptCcompany')],
+      ['경비원수',     pickDetail('kaptdScnt') ? `${pickDetail('kaptdScnt')}명` : null],
+      ['경비용역사',   pickDetail('kaptdSecCom')],
+      ['청소부수',     pickDetail('kaptdClcnt') ? `${pickDetail('kaptdClcnt')}명` : null],
+      ['전기용량(kW)', 전기용량],
+      ['화재경보기',   pickDetail('codeFalarm')],
+      ['복지시설',     pickDetail('welfareFacility')],
+    ].filter(([, v]) => v !== null && v !== undefined && v !== '');
+  }, [selectedApt, kaptDetailRow]);
 
   const areaRangeText = useMemo(() => {
     if (!areas.length) return '';
@@ -696,7 +784,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                   removeFavoriteApt(aptKey);
                   setFavToast({ type: 'removed', x, y, key: null });
                 } else {
-                  addFavoriteApt(selectedApt);
+                  addFavoriteApt(selectedApt, areas, hotAreas);
                   setFavToast({ type: 'added', x, y, key: aptKey });
                 }
                 setTimeout(() => setFavToast(null), 1400);
@@ -718,43 +806,18 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
         {/* 추가정보 버튼 — 아파트 선택 시만 */}
         {selectedApt && (
-          <div style={{ position: 'relative', flexShrink: 0 }}>
+          <div style={{ flexShrink: 0 }}>
             <button
               onClick={() => setShowInfo(p => !p)}
               style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
               title="추가정보"
             >
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <circle cx="9" cy="9" r="7.5" stroke="#aaa" strokeWidth="1.3"/>
-                <line x1="9" y1="8" x2="9" y2="13" stroke="#aaa" strokeWidth="1.4" strokeLinecap="round"/>
-                <circle cx="9" cy="5.5" r="0.9" fill="#aaa"/>
+                <circle cx="9" cy="9" r="7.5" stroke={showInfo ? '#6B625B' : '#aaa'} strokeWidth="1.3"/>
+                <line x1="9" y1="8" x2="9" y2="13" stroke={showInfo ? '#6B625B' : '#aaa'} strokeWidth="1.4" strokeLinecap="round"/>
+                <circle cx="9" cy="5.5" r="0.9" fill={showInfo ? '#6B625B' : '#aaa'}/>
               </svg>
             </button>
-            {showInfo && (
-              <div style={{
-                position: 'absolute', top: '110%', right: 0, zIndex: 100,
-                background: '#fff', border: '1px solid #E6DED4', borderRadius: 12,
-                boxShadow: '0 6px 24px rgba(0,0,0,0.12)',
-                padding: '12px 14px', minWidth: 220,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#6B625B' }}>추가정보</span>
-                  <span onClick={() => setShowInfo(false)} style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#C9BFB4', fontWeight: 700 }}>✕</span>
-                </div>
-                {infoPairs.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {infoPairs.map(([k, v]) => (
-                      <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem' }}>
-                        <span style={{ color: '#6B625B', fontWeight: 800 }}>{k}</span>
-                        <span style={{ fontWeight: 700, color: '#1F1D1B' }}>{k === '세대' ? String(v).replace(/\.0+$/, '') : v}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ fontSize: '0.8rem', color: '#C9BFB4', textAlign: 'center' }}>정보 없음</div>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -808,6 +871,51 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         </div>
 
       </div>
+
+      {/* ── 단지 정보 팝업 (패널 전체 너비) ── */}
+      {selectedApt && showInfo && (
+        <div style={{
+          position: 'absolute', top: 52, left: 0, right: 0, zIndex: 100,
+          background: '#fff', borderBottom: '1.5px solid #E6DED4',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+          maxHeight: 'calc(100% - 52px)', overflowY: 'auto',
+          padding: '14px 18px',
+          fontFamily: 'Pretendard, -apple-system, sans-serif',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                <rect x="1" y="9" width="8" height="10" rx="0.8" fill="#C9BFB4"/>
+                <rect x="11" y="5" width="8" height="14" rx="0.8" fill="#9E9589"/>
+                <rect x="3" y="11" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="6" y="11" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="3" y="14" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="6" y="14" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="7" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="7" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="10" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="10" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="13" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="13" width="2" height="2" rx="0.3" fill="#fff"/>
+              </svg>
+              <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#4A4540', letterSpacing: '0.02em' }}>단지 정보</span>
+            </span>
+            <span onClick={() => setShowInfo(false)} style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#C9BFB4', fontWeight: 700, lineHeight: 1 }}>✕</span>
+          </div>
+          {infoPairs.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {infoPairs.map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: '0.7rem', color: '#B4AFA8', fontWeight: 600, flexShrink: 0, minWidth: 72 }}>{k}</span>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1F1D1B', wordBreak: 'break-word', lineHeight: 1.4 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.75rem', color: '#C9BFB4', textAlign: 'center', padding: '12px 0' }}>정보 없음</div>
+          )}
+        </div>
+      )}
 
       {/* ── 콘텐츠 영역 ── */}
       <div style={{

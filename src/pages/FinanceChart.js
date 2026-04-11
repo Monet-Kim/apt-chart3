@@ -701,15 +701,17 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
             <div style={{
               position: 'absolute',
               top: 7,
-              right: 7,
-              background: 'rgba(107,98,91,0.650)',
+              left: 0,
+              transform: 'translateX(-50%)',
+              background: 'rgba(107,98,91,0.75)',
               color: '#fff',
-              fontSize: '0.50rem',
-              fontWeight: 200,
+              fontSize: '0.68rem',
+              fontWeight: 700,
               borderRadius: 4,
-              padding: '1px 5px',
+              padding: '2px 6px',
               textAlign: 'center',
               lineHeight: 1.4,
+              whiteSpace: 'nowrap',
             }}>
               100%<br />
               {baseTimeRef.current
@@ -722,7 +724,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
 
       {/* 툴팁 */}
       {tooltip && Object.keys(tooltip.vals).length > 0 && (
-        <div style={{ position: 'absolute', top: 36, left: 8, background: 'rgba(31,29,27,0.88)', color: '#fff', borderRadius: 8, padding: '5px 10px', fontSize: '0.78rem', fontWeight: 700, pointerEvents: 'none', zIndex: 20, lineHeight: 1.8 }}>
+        <div style={{ position: 'absolute', top: 36, left: 8, background: 'rgba(31,29,27,0.88)', color: '#fff', borderRadius: 6, padding: '3px 7px', fontSize: '0.68rem', fontWeight: 600, pointerEvents: 'none', zIndex: 20, lineHeight: 1.6 }}>
           <div style={{ color: '#C9BFB4', marginBottom: 2 }}>{tooltip.time}</div>
           {Object.entries(tooltip.vals).map(([k, v]) => (
             <div key={k}>

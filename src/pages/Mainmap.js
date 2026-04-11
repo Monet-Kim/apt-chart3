@@ -141,8 +141,41 @@ const TOGGLE_CHIP = (active) => ({
 
 const DEFAULT_SALE_NM = ['분양', '임대', '혼합'];
 
+// "(숫자+동)" 으로 끝나는 유령 단지 패턴
+const GHOST_APT_RE = /\(\d+동\)$/;
+
+const TOGGLE_SWITCH = (active) => ({
+  position: 'relative',
+  display: 'inline-block',
+  width: 36,
+  height: 20,
+  flexShrink: 0,
+});
+
+const SWITCH_TRACK = (active) => ({
+  position: 'absolute',
+  inset: 0,
+  borderRadius: 10,
+  background: active ? '#4a7fff' : '#d0d7e8',
+  transition: 'background 0.2s',
+  cursor: 'pointer',
+});
+
+const SWITCH_THUMB = (active) => ({
+  position: 'absolute',
+  top: 3,
+  left: active ? 19 : 3,
+  width: 14,
+  height: 14,
+  borderRadius: '50%',
+  background: '#fff',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+  transition: 'left 0.2s',
+  pointerEvents: 'none',
+});
+
 function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
-  const { saleNm, minHoCnt, minUsedate, aptNm } = filters;
+  const { saleNm, minHoCnt, minUsedate, aptNm, removeGhostApt } = filters;
 
   const toggleSale = (v) => {
     const next = saleNm.includes(v) ? saleNm.filter(x => x !== v) : [...saleNm, v];
@@ -174,7 +207,7 @@ function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="range"
-            min={0} max={3000} step={50}
+            min={0} max={3000} step={10}
             value={minHoCnt}
             onChange={e => onChange({ ...filters, minHoCnt: Number(e.target.value) })}
             style={{ flex: 1, accentColor: '#4a7fff' }}
@@ -214,14 +247,32 @@ function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
         </div>
       )}
 
+      {/* 유령 단지 제거 */}
+      <div>
+        <div style={SECTION_TITLE}>유령 단지 제거</div>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+          onClick={() => onChange({ ...filters, removeGhostApt: !removeGhostApt })}
+        >
+          <div style={TOGGLE_SWITCH(removeGhostApt)}>
+            <div style={SWITCH_TRACK(removeGhostApt)} />
+            <div style={SWITCH_THUMB(removeGhostApt)} />
+          </div>
+          <span style={{ fontSize: '12px', fontWeight: 600, color: removeGhostApt ? '#1f2b49' : '#aab' }}>
+            단일 동 제거
+          </span>
+        </div>
+      </div>
+
       {/* 초기화 */}
       <div
         style={{ textAlign: 'center', fontSize: '12px', color: '#4a7fff', cursor: 'pointer', fontWeight: 600 }}
         onClick={() => onChange({
-          saleNm: [...DEFAULT_SALE_NM],
-          minHoCnt: 0,
+          saleNm: ['분양', '혼합'],
+          minHoCnt: 10,
           minUsedate: 1980,
-          aptNm: [...aptTypeOptions],
+          aptNm: aptTypeOptions.filter(t => ['아파트', '주상복합'].includes(t)),
+          removeGhostApt: true,
         })}
       >
         필터 초기화
@@ -241,10 +292,11 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
   // 필터 상태
   const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters] = useState({
-    saleNm: [...DEFAULT_SALE_NM],
-    minHoCnt: 0,
+    saleNm: ['분양', '혼합'],
+    minHoCnt: 10,
     minUsedate: 1980,
     aptNm: [], // 빈 배열 = 아직 옵션 미수집 (= 전체 허용)
+    removeGhostApt: true,
   });
   const [aptTypeOptions, setAptTypeOptions] = useState([]);
 
@@ -389,11 +441,14 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
         const types = [...new Set(dedup.map(r => r['codeAptNm']).filter(Boolean))].sort();
         setAptTypeOptions(prev => {
           const merged = [...new Set([...prev, ...types])].sort();
-          // 새로운 타입이 생기면 필터에도 추가
+          // 새로운 타입이 생겨도 아파트·주상복합만 자동 선택
           setFilters(f => {
             const newTypes = types.filter(t => !prev.includes(t));
             if (newTypes.length === 0) return f;
-            return { ...f, aptNm: [...new Set([...f.aptNm, ...newTypes])] };
+            const DEFAULT_SELECTED = ['아파트', '주상복합'];
+            const toAdd = newTypes.filter(t => DEFAULT_SELECTED.includes(t));
+            if (toAdd.length === 0) return f;
+            return { ...f, aptNm: [...new Set([...f.aptNm, ...toAdd])] };
           });
           return merged;
         });
@@ -432,6 +487,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
         const apt = row['codeAptNm'] || '';
         if (aptTypeOptions.includes(apt) && !filters.aptNm.includes(apt)) return false;
       }
+      // 유령 단지 제거 — "(숫자+동)"으로 끝나는 단지 제거
+      if (filters.removeGhostApt && GHOST_APT_RE.test(row['kaptName'] || '')) return false;
       return true;
     });
   }, [markers, filters, aptTypeOptions]);
@@ -443,6 +500,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }
     if (filters.minHoCnt > 0) cnt++;
     if (filters.minUsedate > 1980) cnt++;
     if (aptTypeOptions.length > 0 && filters.aptNm.length < aptTypeOptions.length) cnt++;
+    if (filters.removeGhostApt) cnt++;
     return cnt;
   }, [filters, aptTypeOptions]);
 

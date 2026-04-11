@@ -1,5 +1,6 @@
 // src/pages/ChartPanel.js
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { createChart, LineSeries } from 'lightweight-charts';
 import { ymToDate } from '../utils/dateUtils';
@@ -7,8 +8,10 @@ import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea, groupAreasToRep, normAptNm,
+  fetchKaptDetail,
 } from './services/aptData';
 import { trimAptName } from '../utils/aptNameUtils';
+import { buildAptInfoPairs } from '../utils/aptInfoPairs';
 
 // ────────────────────────────────────────────
 // 상수
@@ -111,6 +114,7 @@ function MultiSeriesTradeChart({ series, isMobile }) {
   const seriesRef    = useRef(series); // 항상 최신 props 참조
 
   const chartHeight = isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280;
+  const [tooltip, setTooltip] = useState(null);
 
   // 최신 series를 ref로 유지
   seriesRef.current = series;
@@ -185,6 +189,16 @@ function MultiSeriesTradeChart({ series, isMobile }) {
       },
     });
     chartRef.current = chart;
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || !param.point) { setTooltip(null); return; }
+      const vals = {};
+      Object.entries(seriesRefsMap.current).forEach(([id, s]) => {
+        const d = param.seriesData.get(s);
+        if (d) vals[id] = d.value;
+      });
+      setTooltip({ time: param.time, vals });
+    });
 
     // RAF 루프 — dot 항상 최신 상태 유지
     let rafId;
@@ -276,6 +290,33 @@ function MultiSeriesTradeChart({ series, isMobile }) {
     <div style={{ position: 'relative', width: '100%', height: chartHeight, overflow: 'hidden' }}>
       <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
       <svg ref={svgRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 5 }} />
+      {tooltip && Object.keys(tooltip.vals).length > 0 && (
+        <div style={{
+          position: 'absolute', top: 36, left: 8,
+          background: 'rgba(31,29,27,0.88)', color: '#fff',
+          borderRadius: 6, padding: '3px 7px',
+          fontSize: '0.68rem', fontWeight: 600,
+          pointerEvents: 'none', zIndex: 20, lineHeight: 1.6,
+        }}>
+          <div style={{ color: '#C9BFB4', marginBottom: 2 }}>
+            {typeof tooltip.time === 'object'
+              ? `${tooltip.time.year}/${String(tooltip.time.month).padStart(2, '0')}`
+              : String(tooltip.time).slice(0, 7).replace('-', '/')}
+          </div>
+          {series.map((s, idx) => {
+            const v = tooltip.vals[s.id];
+            if (v == null) return null;
+            return (
+              <div key={s.id}>
+                <span style={{ color: SERIES_COLORS[idx % SERIES_COLORS.length] }}>
+                  {trimAptName(s.kaptName)} {s.area}㎡
+                </span>
+                {' '}{v.toFixed(1)}억
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -337,6 +378,7 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
 
     const ro = new ResizeObserver(() => {
       chart.applyOptions({ width: containerRef.current?.clientWidth });
+      setTimeScaleHeight(chart.timeScale().height() || 38);
       updateBaseLineX();
     });
     ro.observe(containerRef.current);
@@ -439,10 +481,11 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
           pointerEvents: 'none', zIndex: 5,
         }}>
           <div style={{
-            position: 'absolute', top: 7, right: 6,
+            position: 'absolute', top: 7, left: 0,
+            transform: 'translateX(-50%)',
             background: 'rgba(107,98,91,0.75)', color: '#fff',
-            fontSize: '0.50rem', fontWeight: 700,
-            borderRadius: 4, padding: '1px 5px',
+            fontSize: '0.68rem', fontWeight: 700,
+            borderRadius: 4, padding: '2px 6px',
             textAlign: 'center', lineHeight: 1.4, whiteSpace: 'nowrap',
           }}>
             100%<br />
@@ -456,11 +499,11 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
       {/* 툴팁 */}
       {tooltip && Object.keys(tooltip.vals).length > 0 && (
         <div style={{
-          position: 'absolute', top: 8, left: 8,
+          position: 'absolute', top: 36, left: 8,
           background: 'rgba(31,29,27,0.88)', color: '#fff',
-          borderRadius: 8, padding: '5px 10px',
-          fontSize: '0.78rem', fontWeight: 700,
-          pointerEvents: 'none', zIndex: 20, lineHeight: 1.8,
+          borderRadius: 6, padding: '3px 7px',
+          fontSize: '0.68rem', fontWeight: 600,
+          pointerEvents: 'none', zIndex: 20, lineHeight: 1.6,
         }}>
           <div style={{ color: '#C9BFB4', marginBottom: 2 }}>
             {typeof tooltip.time === 'object'
@@ -500,6 +543,105 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
 
   // 누적 시리즈: [{ id, key, kaptName, area, x, y, ptsX, ptsY, pPtsX, pPtsY }]
   const [series, setSeries] = useState([]);
+
+  // 자동 초기화 (마운트 시 1회)
+  const autoInitDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (autoInitDoneRef.current || !favApts.length) return;
+    autoInitDoneRef.current = true;
+
+    const top3 = favApts.slice(0, 3);
+    const cutoff3y = (() => {
+      const d = new Date();
+      d.setFullYear(d.getFullYear() - 3);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    })();
+
+    setActiveKey(top3[0].key);
+
+    Promise.allSettled(top3.map(async (fav) => {
+      const { pnu } = buildPNU(fav);
+      const code5 = String(fav.bjdCode || '').slice(0, 5);
+      const [rRes, pRes] = await Promise.allSettled([
+        fetchWorkbook(fav.as1, fav.as2, code5),
+        fetchPdata(fav.as1, fav.as2, code5),
+      ]);
+      if (rRes.status === 'rejected') return;
+      const { wb } = rRes.value;
+      const pdWb = pRes.status === 'fulfilled' ? pRes.value?.wb ?? null : null;
+
+      // 면적 결정: favApts에 저장된 값 우선, 없으면 workbook에서 재계산
+      let list, hotArea;
+      if (fav.areas?.length) {
+        list = fav.areas;
+        hotArea = fav.hotAreas?.[0] ?? pickInitialArea(list);
+      } else {
+        const rawList = listAreasForPnu(wb, pnu, fav.kaptName || null, pdWb);
+        list = groupAreasToRep(rawList);
+        if (!list.length) return;
+
+        const pnuStr   = pnu ? String(pnu) : null;
+        const normName = fav.kaptName ? normAptNm(fav.kaptName) : null;
+        const volMap   = new Map();
+        const tol = (r) => r <= 85 ? 0.9 : r * 0.01;
+
+        for (const obj of (wb || [])) {
+          const match = (pnuStr && String(obj.pnu).trim() === pnuStr) ||
+                        (normName && normAptNm(obj.aptNm) === normName);
+          if (!match) continue;
+          const yy = String(obj.dealYear || '').padStart(4, '0');
+          const mm = String(obj.dealMonth || '').padStart(2, '0');
+          if (`${yy}-${mm}` < cutoff3y) continue;
+          const ar = parseFloat(obj.excluUseAr);
+          if (!Number.isFinite(ar)) continue;
+          const rep = list.find(r => Math.abs(r - ar) <= tol(r));
+          if (rep == null) continue;
+          volMap.set(rep, (volMap.get(rep) || 0) + 1);
+        }
+        for (const obj of (pdWb || [])) {
+          if (parseFloat(obj.isCanceled) === 1) continue;
+          if (normName && normAptNm(obj.aptNm) !== normName) continue;
+          const yy = String(obj.dealYear || '').padStart(4, '0');
+          const mm = String(obj.dealMonth || '').padStart(2, '0');
+          if (`${yy}-${mm}` < cutoff3y) continue;
+          const ar = parseFloat(obj.excluUseAr);
+          if (!Number.isFinite(ar)) continue;
+          const rep = list.find(r => Math.abs(r - ar) <= tol(r));
+          if (rep == null) continue;
+          volMap.set(rep, (volMap.get(rep) || 0) + 1);
+        }
+        hotArea = volMap.size > 0
+          ? [...volMap.entries()].sort((a, b) => b[1] - a[1])[0][0]
+          : list[0];
+      }
+
+      if (!list.length) return;
+      setAreasByKey(prev => ({ ...prev, [fav.key]: list }));
+      const areaNorm = Math.round(hotArea * 10) / 10;
+      const id = `${fav.key}#${areaNorm}`;
+
+      const pack = aggregateTradesForArea({
+        wb, pdWb, pnu, kaptName: fav.kaptName || null,
+        areaNorm, smoothWindow: SMOOTH_WINDOW,
+      });
+      setSeries(prev => {
+        if (prev.some(s => s.id === id)) return prev;
+        return [...prev, {
+          id, key: fav.key, kaptName: fav.kaptName, area: areaNorm,
+          x: pack.x || [], y: pack.avg || [],
+          ptsX: pack.ptsX || [], ptsY: pack.ptsY || [],
+          pPtsX: pack.pPtsX || [], pPtsY: pack.pPtsY || [],
+        }];
+      });
+    }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 상세비교 모달
+  const [showSelectModal, setShowSelectModal] = useState(false);
+  const [selectedKeys, setSelectedKeys]       = useState([]);
+  const [compareLoading, setCompareLoading]   = useState(false);
+  const [compareData, setCompareData]         = useState(null);
 
   const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: onAreaMouseUp } = useAreaDragScroll();
 
@@ -634,6 +776,25 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
     }
   };
 
+  // ── 상세비교 데이터 로드 ──
+  const loadCompareData = async (keys) => {
+    setCompareLoading(true);
+    try {
+      const apts = keys.map(k => favApts.find(f => f.key === k)).filter(Boolean);
+      const results = await Promise.all(apts.map(async (fav) => {
+        const code5 = String(fav.bjdCode || '').slice(0, 5);
+        const detailMap = await fetchKaptDetail(fav.as1, fav.as2, code5).catch(() => null);
+        const detailRow = detailMap && fav.kaptCode
+          ? detailMap.get(String(fav.kaptCode).trim()) ?? null : null;
+        return { fav, listRow: fav, detailRow, pairs: buildAptInfoPairs(fav, detailRow, { includeAddress: false }) };
+      }));
+      setCompareData(results);
+      setShowSelectModal(false);
+    } finally {
+      setCompareLoading(false);
+    }
+  };
+
   const padding = isMobile ? '14px 16px' : isTablet ? '16px 20px' : '20px 24px';
 
   return (
@@ -649,23 +810,54 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               <line x1="3" y1="21" x2="3" y2="4"/>
             </svg>
           </span>
-          즐겨찾기 단지 비교
+          단지끼리 비교
         </span>
-        <button
-          onClick={() => {/* 차후 구현 */}}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: 'none', border: '1.5px solid #E6DED4', borderRadius: 8,
-            padding: '0 12px', height: 34, cursor: 'pointer',
-            fontSize: '0.82rem', fontWeight: 600, color: '#6B625B', flexShrink: 0,
-          }}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={15} height={15}>
-            <path d="M22 2L11 13"/>
-            <path d="M22 2L15 22 11 13 2 9l20-7z"/>
-          </svg>
-          게시판 글로 보내기
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              if (compareData || showSelectModal) {
+                setCompareData(null);
+                setShowSelectModal(false);
+                return;
+              }
+              const keys = favApts.map(f => f.key);
+              if (keys.length <= 3 && keys.length >= 2) {
+                setSelectedKeys(keys);
+                loadCompareData(keys);
+              } else {
+                setSelectedKeys(keys.length === 1 ? keys : []);
+                setShowSelectModal(true);
+              }
+            }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: 'none', border: '1.5px solid #E6DED4', borderRadius: 8,
+              padding: '0 10px', height: 30, cursor: 'pointer',
+              fontSize: '0.78rem', fontWeight: 600, color: '#6B625B',
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={13} height={13}>
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+            </svg>
+            상세비교
+          </button>
+          <button
+            onClick={() => {/* 차후 구현 */}}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: 'none', border: '1.5px solid #E6DED4', borderRadius: 8,
+              padding: '0 10px', height: 30, cursor: 'pointer',
+              fontSize: '0.78rem', fontWeight: 600, color: '#6B625B',
+            }}
+            title="게시판 글로 보내기"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="#6B625B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={14} height={14}>
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            작성하기
+          </button>
+        </div>
       </div>
 
       {/* ── 콘텐츠 영역 ── */}
@@ -793,31 +985,6 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         </div>
       )}
 
-      {/* ── G1: 실거래 평균가 ── */}
-      <div style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
-        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#1F1D1B', marginBottom: 4 }}>
-          실거래 평균가 <span style={{ color: '#6B625B', fontWeight: 600 }}>단위: 억원</span>
-        </div>
-        {series.length > 0 ? (
-          <MultiSeriesTradeChart series={series} isMobile={isMobile} />
-        ) : (
-          <div style={{ height: isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
-            면적을 선택하면 차트가 표시됩니다
-          </div>
-        )}
-        {/* G1 범례 */}
-        {series.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
-            {series.map((s, idx) => (
-              <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 700, color: '#1F1D1B' }}>
-                <span style={{ width: 16, height: 2, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2 }} />
-                {trimAptName(s.kaptName)} {s.area}㎡
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
       {/* ── G2: 정규화 비교 ── */}
       <div style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -881,7 +1048,187 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         )}
       </div>
 
+      {/* ── G1: 실거래 평균가 ── */}
+      <div style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
+        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#1F1D1B', marginBottom: 4 }}>
+          실거래 평균가 <span style={{ color: '#6B625B', fontWeight: 600 }}>단위: 억원</span>
+        </div>
+        {series.length > 0 ? (
+          <MultiSeriesTradeChart series={series} isMobile={isMobile} />
+        ) : (
+          <div style={{ height: isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
+            면적을 선택하면 차트가 표시됩니다
+          </div>
+        )}
+        {series.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
+            {series.map((s, idx) => (
+              <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 700, color: '#1F1D1B' }}>
+                <span style={{ width: 16, height: 2, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2 }} />
+                {trimAptName(s.kaptName)} {s.area}㎡
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       </div>{/* ── 콘텐츠 영역 끝 ── */}
+
+      {/* ── 상세비교 단지 선택 모달 ── */}
+      {showSelectModal && !compareData && (() => {
+        const selectContent = (
+          <>
+            {/* 헤더 */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 12px', borderBottom: '1px solid #EDE8E0', flexShrink: 0 }}>
+              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#1F1D1B' }}>비교할 단지 선택</span>
+              <span style={{ fontSize: '0.72rem', color: '#888780' }}>최대 3개</span>
+              <button onClick={() => setShowSelectModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B4AFA8', fontSize: '1rem', padding: '0 0 0 8px', lineHeight: 1 }}>✕</button>
+            </div>
+            {/* 목록 */}
+            <div style={{ padding: '12px 20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, ...(isMobile ? { flex: 1 } : { maxHeight: 320 }) }}>
+              {favApts.length === 0 ? (
+                <div style={{ color: '#B4AFA8', fontSize: '0.8rem', textAlign: 'center', padding: '24px 0' }}>즐겨찾기에 추가된 단지가 없습니다.</div>
+              ) : favApts.map(fav => {
+                const isSelected = selectedKeys.includes(fav.key);
+                const isDisabled = !isSelected && selectedKeys.length >= 3;
+                return (
+                  <div
+                    key={fav.key}
+                    onClick={() => {
+                      if (isDisabled) return;
+                      setSelectedKeys(prev => prev.includes(fav.key) ? prev.filter(k => k !== fav.key) : [...prev, fav.key]);
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '9px 12px', borderRadius: 8, cursor: isDisabled ? 'not-allowed' : 'pointer',
+                      border: isSelected ? '1.5px solid #C9A84C' : '1.5px solid #E6DED4',
+                      background: isSelected ? '#F5F0E8' : '#fff',
+                      opacity: isDisabled ? 0.4 : 1, transition: 'all 0.15s',
+                    }}
+                  >
+                    <div style={{ width: 18, height: 18, borderRadius: 5, flexShrink: 0, background: isSelected ? '#C9A84C' : '#F0EBE3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {isSelected && <svg viewBox="0 0 12 10" width={11} height={9} fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,5 4.5,8.5 11,1"/></svg>}
+                    </div>
+                    <div style={{ flex: 1, textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: '#1F1D1B' }}>{trimAptName(fav.kaptName)}</div>
+                      {fav.kaptAddr && <div style={{ fontSize: '0.67rem', color: '#B4AFA8', marginTop: 1 }}>{fav.kaptAddr}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* 하단 버튼 */}
+            <div style={{ display: 'flex', gap: 8, padding: '12px 20px 16px', borderTop: '1px solid #EDE8E0', flexShrink: 0 }}>
+              <button onClick={() => setShowSelectModal(false)} style={{ flex: 1, height: 38, borderRadius: 8, border: '1.5px solid #E6DED4', background: '#fff', color: '#6B625B', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}>취소</button>
+              <button
+                disabled={selectedKeys.length < 2 || compareLoading}
+                onClick={() => loadCompareData(selectedKeys)}
+                style={{ flex: 2, height: 38, borderRadius: 8, border: 'none', background: selectedKeys.length >= 2 ? '#C9A84C' : '#E6DED4', color: selectedKeys.length >= 2 ? '#fff' : '#B4AFA8', fontSize: '0.82rem', fontWeight: 700, cursor: selectedKeys.length >= 2 && !compareLoading ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'background 0.15s' }}
+              >
+                {compareLoading ? (
+                  <><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>불러오는 중…</>
+                ) : `비교하기 (${selectedKeys.length}개 선택)`}
+              </button>
+            </div>
+          </>
+        );
+
+        if (isMobile) {
+          return (
+            <div style={{
+              position: 'absolute', top: 52, left: 0, right: 0, bottom: 0, zIndex: 100,
+              background: '#fff', boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+              display: 'flex', flexDirection: 'column',
+              fontFamily: 'Pretendard, -apple-system, sans-serif',
+            }}>
+              {selectContent}
+            </div>
+          );
+        }
+        return ReactDOM.createPortal(
+          <div onClick={() => setShowSelectModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#FDFBF8', borderRadius: 14, width: '100%', maxWidth: 380, margin: '0 16px', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', fontFamily: 'Pretendard, -apple-system, sans-serif', overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: '80vh' }}>
+              {selectContent}
+            </div>
+          </div>,
+          document.body
+        );
+      })()}
+
+      {/* ── 상세비교 결과 모달 ── */}
+      {compareData && (() => {
+        const N = compareData.length;
+        const allLabels = [...new Set(compareData.flatMap(d => d.pairs.map(([lbl]) => lbl)))];
+        const maps = compareData.map(d => Object.fromEntries(d.pairs));
+
+        const resultContent = (
+          <>
+            {/* 헤더 */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #EDE8E0', flexShrink: 0 }}>
+              <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#1F1D1B', display: 'flex', alignItems: 'center', gap: 7 }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="#C9A84C" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={17} height={17}>
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+                </svg>
+                단지 상세비교
+              </span>
+              <button onClick={() => setCompareData(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#B4AFA8', fontSize: '1.1rem', lineHeight: 1, padding: 4 }}>✕</button>
+            </div>
+            {/* 비교 테이블 */}
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${N}, 1fr)`, fontSize: '0.7rem' }}>
+                <div style={{ padding: '12px 8px 10px', background: '#F5F1EC' }} />
+                {compareData.map((d, i) => (
+                  <div key={i} style={{ padding: '12px 10px 10px', background: '#F5F1EC', borderBottom: '2px solid #C9A84C', borderLeft: '1px solid #EDE8E0', fontSize: '0.8rem', fontWeight: 800, color: '#1F1D1B', lineHeight: 1.35, textAlign: 'center' }}>
+                    {trimAptName(d.fav.kaptName)}
+                  </div>
+                ))}
+                {allLabels.map((label, rowIdx) => {
+                  const rowBg = rowIdx % 2 === 0 ? '#FDFBF8' : '#F5F1EC';
+                  return (
+                    <>
+                      <div key={`lbl-${rowIdx}`} style={{ padding: '7px 8px', background: rowBg, color: '#888780', fontWeight: 600, fontSize: '0.65rem', borderTop: '1px solid #EDE8E0', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>{label}</div>
+                      {compareData.map((_, colIdx) => (
+                        <div key={`val-${rowIdx}-${colIdx}`} style={{ padding: '7px 10px', background: rowBg, color: maps[colIdx][label] ? '#1F1D1B' : '#C9BFB4', fontSize: '0.72rem', fontWeight: 500, borderTop: '1px solid #EDE8E0', borderLeft: '1px solid #EDE8E0', wordBreak: 'keep-all', lineHeight: 1.4, textAlign: 'center' }}>
+                          {maps[colIdx][label] || '–'}
+                        </div>
+                      ))}
+                    </>
+                  );
+                })}
+              </div>
+            </div>
+            {/* 하단 닫기 */}
+            {!isMobile && (
+              <div style={{ padding: '10px 20px', borderTop: '1px solid #EDE8E0', flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
+                <button onClick={() => setCompareData(null)} style={{ height: 34, padding: '0 20px', borderRadius: 8, border: '1.5px solid #E6DED4', background: '#fff', color: '#6B625B', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>닫기</button>
+              </div>
+            )}
+          </>
+        );
+
+        if (isMobile) {
+          return (
+            <div style={{
+              position: 'absolute', top: 52, left: 0, right: 0, bottom: 0, zIndex: 100,
+              background: '#fff', boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+              display: 'flex', flexDirection: 'column',
+              fontFamily: 'Pretendard, -apple-system, sans-serif',
+            }}>
+              {resultContent}
+            </div>
+          );
+        }
+        return ReactDOM.createPortal(
+          <div onClick={() => setCompareData(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px 12px' }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#FDFBF8', borderRadius: 14, width: '100%', maxWidth: 960, maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 40px rgba(0,0,0,0.22)', fontFamily: 'Pretendard, -apple-system, sans-serif', overflow: 'hidden' }}>
+              {resultContent}
+            </div>
+          </div>,
+          document.body
+        );
+      })()}
+
     </aside>
   );
 }
