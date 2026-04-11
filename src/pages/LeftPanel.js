@@ -756,7 +756,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           {selectedApt ? (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#1F1D1B' }}>
               <span
-                style={{ color: '#C9BFB4', flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
+                style={{ color: '#C9A84C', flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
                 onClick={(isMobile || isTablet) ? onClose : undefined}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -774,7 +774,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           ) : (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#C9BFB4' }}>
               <span
-                style={{ color: '#6B625B', flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
+                style={{ color: '#BBBBBB', flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
                 onClick={(isMobile || isTablet) ? onClose : undefined}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
