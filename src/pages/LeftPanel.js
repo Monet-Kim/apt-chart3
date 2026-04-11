@@ -3,6 +3,7 @@ import FinanceChart from './FinanceChart';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { ymToDate, dateToISOYM } from '../utils/dateUtils';
+import { getChartHeight } from '../utils/chartHeight';
 import { trimAptName } from '../utils/aptNameUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata, fetchKaptDetail, listAreasForPnu,
@@ -112,7 +113,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
   const avgSeriesRef = useRef(null);
   const svgRef       = useRef(null);
 
-  const [chartHeight, setChartHeight] = useState(isMobile ? 200 : 240);
+  const [chartHeight, setChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
 
   // x: ["2020-01", ...] → "YYYY-MM-01" 형태로 변환
   function toTime(ym) {
@@ -238,7 +239,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
     const ro = new ResizeObserver(() => {
       const w = containerRef.current?.clientWidth || 0;
       chart.applyOptions({ width: w });
-      setChartHeight(Math.max(160, Math.round(w * 0.5)));
+      setChartHeight(getChartHeight(isMobile, w));
       redrawDotsRef.current?.();
     });
     ro.observe(containerRef.current);

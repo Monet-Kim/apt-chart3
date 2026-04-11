@@ -4,6 +4,7 @@ import html2canvas from 'html2canvas';
 import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { createChart, LineSeries } from 'lightweight-charts';
+import { getChartHeight } from '../utils/chartHeight';
 import { ymToDate } from '../utils/dateUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
@@ -113,7 +114,7 @@ function MultiSeriesTradeChart({ series, isMobile }) {
   const svgRef       = useRef(null);
   const seriesRef    = useRef(series); // 항상 최신 props 참조
 
-  const chartHeight = isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280;
+  const chartHeight = getChartHeight(isMobile, window.innerWidth);
   const [tooltip, setTooltip] = useState(null);
 
   // 최신 series를 ref로 유지
@@ -342,7 +343,7 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
   const [timeScaleHeight, setTimeScaleHeight] = useState(38);
   const [tooltip, setTooltip]             = useState(null);
 
-  const chartHeight = isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280;
+  const chartHeight = getChartHeight(isMobile, window.innerWidth);
 
   // 기준 날짜 문자열 (YYYY-MM-DD)
   const baseDateStr = useMemo(() => {
@@ -1097,7 +1098,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         {series.length > 0 ? (
           <NormCompareChart series={series} normMonthsAgo={normMonthsAgo} isMobile={isMobile} />
         ) : (
-          <div style={{ height: isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
+          <div style={{ height: getChartHeight(isMobile, window.innerWidth), display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
             면적을 선택하면 차트가 표시됩니다
           </div>
         )}
@@ -1122,7 +1123,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         {series.length > 0 ? (
           <MultiSeriesTradeChart series={series} isMobile={isMobile} />
         ) : (
-          <div style={{ height: isMobile ? Math.round(window.innerWidth * (2 / 3)) : 280, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
+          <div style={{ height: getChartHeight(isMobile, window.innerWidth), display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#F7F3EE', borderRadius: 8, color: '#C9BFB4', fontSize: '0.85rem' }}>
             면적을 선택하면 차트가 표시됩니다
           </div>
         )}

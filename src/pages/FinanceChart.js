@@ -4,6 +4,7 @@
 // 그래프2: 정규화(%) 비교
 
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
+import { getChartHeight } from '../utils/chartHeight';
 import { createChart, LineSeries } from 'lightweight-charts';
 
 const aptNameKeyframes = `
@@ -213,7 +214,7 @@ const PriceChart = memo(function PriceChart({ selected, currency, yearWindow, is
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
 
-  const [chartHeight, setChartHeight] = useState(isMobile ? 200 : 240);
+  const [chartHeight, setChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
 
   // chartHeight 변경 시 차트에 반영
   useEffect(() => {
@@ -253,8 +254,7 @@ const PriceChart = memo(function PriceChart({ selected, currency, yearWindow, is
       if (!containerRef.current) return;
       const w = containerRef.current.clientWidth;
       chartRef.current?.applyOptions({ width: w });
-      const newH = Math.max(160, Math.round(w * 0.5));
-      setChartHeight(newH);
+      setChartHeight(getChartHeight(isMobile, w));
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
@@ -399,7 +399,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
   const [errMsg, setErrMsg]   = useState('');
   const [tooltip, setTooltip] = useState(null);
 
-  const [dynChartHeight, setDynChartHeight] = useState(isMobile ? 200 : 240);
+  const [dynChartHeight, setDynChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
   const headerRef  = useRef(null);
 
   useEffect(() => { selectedRef.current    = selected;      }, [selected]);
@@ -548,7 +548,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
       if (!containerRef.current) return;
       const w = containerRef.current.clientWidth;
       chartRef.current?.applyOptions({ width: w });
-      setDynChartHeight(Math.max(160, Math.round(w * 0.5)));
+      setDynChartHeight(getChartHeight(isMobile, w));
       updateBaseX();
     });
     ro.observe(containerRef.current);
