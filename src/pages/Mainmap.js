@@ -1,5 +1,5 @@
 // src/pages/Mainmap.js
-import React, { useMemo, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Map as KakaoMap, CustomOverlayMap } from 'react-kakao-maps-sdk';
 import { parseCSV } from '../utils/csvUtils';
 import { trimAptName } from '../utils/aptNameUtils';
@@ -281,8 +281,13 @@ function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
   );
 }
 
-function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt }) {
+function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, isHidden }) {
   const mapRef = useRef(null);
+
+  // 패널이 닫혀서 지도가 다시 보일 때 relayout
+  useEffect(() => {
+    if (!isHidden && mapRef.current) mapRef.current.relayout();
+  }, [isHidden]);
   const [level, setLevel] = useState(mapLevel ?? 5);
   const [markers, setMarkers] = useState([]);
   const [loading, setLoading] = useState(false);

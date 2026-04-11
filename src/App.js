@@ -196,13 +196,16 @@ function App() {
 
       {/* ── 지도 영역 ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <Mainmap
-          mapCenter={mapCenter}
-          setMapCenter={setMapCenter}
-          mapLevel={mapLevel}
-          setMapLevel={setMapLevel}
-          onSelectApt={handleSelectApt}
-        />
+        <div style={{ position: 'absolute', inset: 0, display: (!isDesktop && openPanel) ? 'none' : 'contents' }}>
+          <Mainmap
+            mapCenter={mapCenter}
+            setMapCenter={setMapCenter}
+            mapLevel={mapLevel}
+            setMapLevel={setMapLevel}
+            onSelectApt={handleSelectApt}
+            isHidden={!isDesktop && !!openPanel}
+          />
+        </div>
 
         {/* 데스크탑: 책갈피 탭 (사이드바 우측 벽에 부착) */}
         {isDesktop && (
