@@ -1166,8 +1166,8 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                       setSelectedKeys(prev => prev.includes(fav.key) ? prev.filter(k => k !== fav.key) : [...prev, fav.key]);
                     }}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      padding: '9px 12px', borderRadius: 8, cursor: isDisabled ? 'not-allowed' : 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '7px 10px', borderRadius: 8, cursor: isDisabled ? 'not-allowed' : 'pointer',
                       border: isSelected ? '1.5px solid #C9A84C' : '1.5px solid #E6DED4',
                       background: isSelected ? '#F5F0E8' : '#fff',
                       opacity: isDisabled ? 0.4 : 1, transition: 'all 0.15s',
@@ -1176,9 +1176,8 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                     <div style={{ width: 18, height: 18, borderRadius: 5, flexShrink: 0, background: isSelected ? '#C9A84C' : '#F0EBE3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {isSelected && <svg viewBox="0 0 12 10" width={11} height={9} fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,5 4.5,8.5 11,1"/></svg>}
                     </div>
-                    <div style={{ flex: 1, textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: '#1F1D1B' }}>{trimAptName(fav.kaptName)}</div>
-                      {fav.kaptAddr && <div style={{ fontSize: '0.67rem', color: '#B4AFA8', marginTop: 1 }}>{fav.kaptAddr}</div>}
+                    <div style={{ flex: 1, textAlign: 'center', fontSize: '0.82rem', fontWeight: isSelected ? 700 : 500, color: '#1F1D1B' }}>
+                      {trimAptName(fav.kaptName)}
                     </div>
                   </div>
                 );
