@@ -385,6 +385,8 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
   const chartRef     = useRef(null);
   const seriesRefs     = useRef([]);
   const aptSeriesRef   = useRef(null); // 아파트 시리즈
+  const aptMonthMapRef = useRef({});   // "YYYY-MM" → 정규화 값 (O(1) 조회)
+  const showAptRef     = useRef(showApt);
   const baseTimeRef    = useRef(null);
   const selectedRef    = useRef(selected);
   const normParamsRef  = useRef({});    // assetKey → { baseValue, isRate, maxValue }
@@ -403,6 +405,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
   useEffect(() => { selectedRef.current    = selected;      }, [selected]);
   useEffect(() => { normMonthsAgoRef.current = normMonthsAgo; }, [normMonthsAgo]);
   useEffect(() => { yearWindowRef.current    = yearWindow;    }, [yearWindow]);
+  useEffect(() => { showAptRef.current       = showApt;       }, [showApt]);
 
   const updateBaseX = useCallback(() => {
     if (!baseTimeRef.current || !chartRef.current) return;
@@ -512,6 +515,13 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
         const d = param.seriesData.get(s);
         if (d) vals[selectedRef.current[i]] = d.value;
       });
+      if (aptSeriesRef.current && showAptRef.current) {
+        const t = typeof param.time === 'object'
+          ? `${param.time.year}-${String(param.time.month).padStart(2,'0')}`
+          : String(param.time).slice(0, 7);
+        const val = aptMonthMapRef.current[t];
+        if (val != null) vals['APT'] = val;
+      }
       setTooltip({ time: param.time, vals });
     });
 
@@ -646,6 +656,9 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
     });
     series.setData(normalized);
     aptSeriesRef.current = series;
+    const monthMap = {};
+    normalized.forEach(p => { monthMap[p.time.slice(0, 7)] = p.value; });
+    aptMonthMapRef.current = monthMap;
   }, [aptX, aptAvg, yearWindow, normMonthsAgo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 아파트 시리즈 표시/숨김
@@ -674,7 +687,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
             </span>
           );
         })}
-        {aptName && aptAvg.length > 0 && (
+        {aptName && aptAvg.length > 0 && showApt && (
           <span key={aptName} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.78rem', fontWeight: 700, borderRadius: 4, padding: '1px 4px', animation: 'aptNameHighlightBg 2s ease-out forwards' }}>
             <span style={{ width: 16, height: 3, background: 'rgba(196, 154, 42, 0.7)', display: 'inline-block', borderRadius: 2 }} />
             <span style={{ animation: 'aptNameHighlightText 2s ease-out forwards' }}>{aptName}</span>
@@ -726,12 +739,20 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
       {tooltip && Object.keys(tooltip.vals).length > 0 && (
         <div style={{ position: 'absolute', top: 36, left: 8, background: 'rgba(31,29,27,0.88)', color: '#fff', borderRadius: 6, padding: '3px 7px', fontSize: '0.68rem', fontWeight: 600, pointerEvents: 'none', zIndex: 20, lineHeight: 1.6 }}>
           <div style={{ color: '#C9BFB4', marginBottom: 2 }}>{tooltip.time}</div>
-          {Object.entries(tooltip.vals).map(([k, v]) => (
-            <div key={k}>
-              <span style={{ color: ASSET_MAP[k]?.color }}>{ASSET_MAP[k]?.label}</span>
-              {' '}{Math.round(Number(v))}%
-            </div>
-          ))}
+          {Object.entries(tooltip.vals).map(([k, v]) => {
+            const color = k === 'APT' ? 'rgba(196,154,42,0.9)' : ASSET_MAP[k]?.color;
+            return (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                  background: color, flexShrink: 0,
+                }} />
+                <span style={{ color }}>
+                  {Math.round(Number(v))}%
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

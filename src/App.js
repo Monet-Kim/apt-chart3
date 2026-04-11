@@ -1,4 +1,11 @@
 // src/App.js
+// 데이터 구조 변경 시 APP_VERSION을 올리면 구버전 localStorage 자동 초기화
+const APP_VERSION = '1';
+if (localStorage.getItem('app_version') !== APP_VERSION) {
+  localStorage.clear();
+  localStorage.setItem('app_version', APP_VERSION);
+}
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
 import Mainmap from './pages/Mainmap';

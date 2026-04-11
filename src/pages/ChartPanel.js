@@ -307,11 +307,14 @@ function MultiSeriesTradeChart({ series, isMobile }) {
             const v = tooltip.vals[s.id];
             if (v == null) return null;
             return (
-              <div key={s.id}>
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                  background: SERIES_COLORS[idx % SERIES_COLORS.length], flexShrink: 0,
+                }} />
                 <span style={{ color: SERIES_COLORS[idx % SERIES_COLORS.length] }}>
-                  {trimAptName(s.kaptName)} {s.area}㎡
+                  {v.toFixed(1)}억
                 </span>
-                {' '}{v.toFixed(1)}억
               </div>
             );
           })}
@@ -427,8 +430,9 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
       const baseValue = basePoint.value;
       if (!baseValue) return;
 
-      // 첫 번째 시리즈의 기준점을 공통 수직선으로 사용
-      if (idx === 0) baseTimeRef.current = basePoint.time;
+      // 공유 기준일을 수직선 위치로 사용 (핀 고정 계열도 점선은 baseDateStr 기준)
+      // 차트 데이터는 YYYY-MM-01 형식이므로 월의 1일로 맞춤
+      if (idx === 0) baseTimeRef.current = baseDateStr.slice(0, 7) + '-01';
 
       // 정규화
       const normalized = points.map(p => ({
@@ -514,11 +518,14 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
             const v = tooltip.vals[s.id];
             if (v == null) return null;
             return (
-              <div key={s.id}>
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{
+                  display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                  background: SERIES_COLORS[idx % SERIES_COLORS.length], flexShrink: 0,
+                }} />
                 <span style={{ color: SERIES_COLORS[idx % SERIES_COLORS.length] }}>
-                  {trimAptName(s.kaptName)} {s.area}㎡
+                  {Math.round(v)}%
                 </span>
-                {' '}{Math.round(v)}%
               </div>
             );
           })}
@@ -544,12 +551,30 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
   // 누적 시리즈: [{ id, key, kaptName, area, x, y, ptsX, ptsY, pPtsX, pPtsY }]
   const [series, setSeries] = useState([]);
 
-  // 자동 초기화 (마운트 시 1회)
-  const autoInitDoneRef = useRef(false);
+  // 자동 초기화: 탭이 열릴 때 favApts가 바뀌었으면 재초기화
+  const lastFavKeysRef = useRef(null);
+  const prevIsOpenRef  = useRef(false);
 
   useEffect(() => {
-    if (autoInitDoneRef.current || !favApts.length) return;
-    autoInitDoneRef.current = true;
+    const justOpened = isOpen && !prevIsOpenRef.current;
+    prevIsOpenRef.current = isOpen;
+
+    if (!isOpen || !favApts.length) return;
+
+    const currentKeys = favApts.map(f => f.key).join(',');
+    const isFirst = lastFavKeysRef.current === null;
+    const favsChanged = lastFavKeysRef.current !== currentKeys;
+
+    // 첫 오픈이거나, 탭이 다시 열렸을 때 favApts가 바뀐 경우만 초기화
+    if (!isFirst && (!justOpened || !favsChanged)) return;
+
+    lastFavKeysRef.current = currentKeys;
+
+    // 기존 시리즈/상태 초기화
+    setSeries([]);
+    setAreasByKey({});
+    setHotAreasByKey({});
+    setActiveKey(null);
 
     const top3 = favApts.slice(0, 3);
     const cutoff3y = (() => {
@@ -635,7 +660,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         }];
       });
     }));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOpen, favApts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 상세비교 모달
   const [showSelectModal, setShowSelectModal] = useState(false);
@@ -693,42 +718,46 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       setAreasByKey(prev => ({ ...prev, [fav.key]: list }));
       if (!list.length) setErrMsg('면적 목록이 없습니다.');
 
-      // Hot 순위 계산 (거래량 집계 — 면적 탭 표시용, 그래프와 무관)
-      const cutoff = (() => {
-        const d = new Date(); d.setFullYear(d.getFullYear() - 1);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      })();
-      const pnuStr  = pnu ? String(pnu) : null;
-      const normName = fav.kaptName ? normAptNm(fav.kaptName) : null;
-      const volMap  = new Map();
+      // Hot 순위: favApts에 저장된 값 우선, 없으면 3년 거래량으로 계산
+      if (fav.hotAreas?.length) {
+        setHotAreasByKey(prev => ({ ...prev, [fav.key]: fav.hotAreas }));
+      } else {
+        const cutoff = (() => {
+          const d = new Date(); d.setFullYear(d.getFullYear() - 3);
+          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        })();
+        const pnuStr   = pnu ? String(pnu) : null;
+        const normName = fav.kaptName ? normAptNm(fav.kaptName) : null;
+        const volMap   = new Map();
 
-      for (const obj of (wb || [])) {
-        const match = (pnuStr && String(obj.pnu).trim() === pnuStr) ||
-                      (normName && normAptNm(obj.aptNm) === normName);
-        if (!match) continue;
-        const yy = String(obj.dealYear || '').padStart(4, '0');
-        const mm = String(obj.dealMonth || '').padStart(2, '0');
-        if (`${yy}-${mm}` < cutoff) continue;
-        const ar = parseFloat(obj.excluUseAr);
-        if (!Number.isFinite(ar)) continue;
-        const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
-        if (rep == null) continue;
-        volMap.set(rep, (volMap.get(rep) || 0) + 1);
+        for (const obj of (wb || [])) {
+          const match = (pnuStr && String(obj.pnu).trim() === pnuStr) ||
+                        (normName && normAptNm(obj.aptNm) === normName);
+          if (!match) continue;
+          const yy = String(obj.dealYear || '').padStart(4, '0');
+          const mm = String(obj.dealMonth || '').padStart(2, '0');
+          if (`${yy}-${mm}` < cutoff) continue;
+          const ar = parseFloat(obj.excluUseAr);
+          if (!Number.isFinite(ar)) continue;
+          const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+          if (rep == null) continue;
+          volMap.set(rep, (volMap.get(rep) || 0) + 1);
+        }
+        for (const obj of (pdWb || [])) {
+          if (parseFloat(obj.isCanceled) === 1) continue;
+          if (normName && normAptNm(obj.aptNm) !== normName) continue;
+          const yy = String(obj.dealYear || '').padStart(4, '0');
+          const mm = String(obj.dealMonth || '').padStart(2, '0');
+          if (`${yy}-${mm}` < cutoff) continue;
+          const ar = parseFloat(obj.excluUseAr);
+          if (!Number.isFinite(ar)) continue;
+          const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+          if (rep == null) continue;
+          volMap.set(rep, (volMap.get(rep) || 0) + 1);
+        }
+        const hotTop2 = [...volMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([area]) => area);
+        setHotAreasByKey(prev => ({ ...prev, [fav.key]: hotTop2 }));
       }
-      for (const obj of (pdWb || [])) {
-        if (parseFloat(obj.isCanceled) === 1) continue;
-        if (normName && normAptNm(obj.aptNm) !== normName) continue;
-        const yy = String(obj.dealYear || '').padStart(4, '0');
-        const mm = String(obj.dealMonth || '').padStart(2, '0');
-        if (`${yy}-${mm}` < cutoff) continue;
-        const ar = parseFloat(obj.excluUseAr);
-        if (!Number.isFinite(ar)) continue;
-        const rep = list.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
-        if (rep == null) continue;
-        volMap.set(rep, (volMap.get(rep) || 0) + 1);
-      }
-      const hotTop2 = [...volMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2).map(([area]) => area);
-      setHotAreasByKey(prev => ({ ...prev, [fav.key]: hotTop2 }));
     } catch {
       setErrMsg('면적 목록을 불러오지 못했습니다.');
     } finally {
