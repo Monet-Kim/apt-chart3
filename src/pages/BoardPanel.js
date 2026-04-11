@@ -537,7 +537,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
 
       {/* 폼 본문 */}
       <form id="board-write-form" onSubmit={handlePost}
-        style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', display: 'flex', flexDirection: 'column' }}>
 
         {/* 제목 — 위로 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 46, borderBottom: '1px solid #E6DED4' }}>
