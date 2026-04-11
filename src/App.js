@@ -289,7 +289,7 @@ function App() {
       {/* 모바일·태블릿 하단 네비게이션 바 */}
       {!isDesktop && (
         <div style={{
-          position: 'absolute',
+          position: 'fixed',
           bottom: 0, left: 0, right: 0,
           height: 'calc(56px + env(safe-area-inset-bottom, 0px))',
           background: '#fff',
