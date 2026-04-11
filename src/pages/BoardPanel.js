@@ -593,7 +593,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
           게시판
         </span>
         {user ? (
-          <button onClick={openWriteForm} style={{ ...btnSecondary, gap: 6 }}>
+          <button onClick={openWriteForm} style={{ ...btnSecondary, gap: 4, height: 30, padding: '0 10px', fontSize: '0.78rem' }}>
             <IconEdit /> 글쓰기
           </button>
         ) : (
