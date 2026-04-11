@@ -1244,9 +1244,9 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             {/* 비교 테이블 */}
             <div style={{ overflowY: 'auto', flex: 1 }}>
               <div style={{ display: 'grid', gridTemplateColumns: `max-content repeat(${N}, 1fr)`, fontSize: '0.7rem' }}>
-                <div style={{ padding: '12px 8px 10px', background: '#F5F1EC' }} />
+                <div style={{ padding: '12px 8px 10px', background: '#F5F1EC', position: 'sticky', top: 0, zIndex: 2 }} />
                 {compareData.map((d, i) => (
-                  <div key={i} style={{ padding: '12px 10px 10px', background: '#F5F1EC', borderBottom: '2px solid #C9A84C', borderLeft: '1px solid #EDE8E0', fontSize: '0.8rem', fontWeight: 800, color: '#1F1D1B', lineHeight: 1.35, textAlign: 'center' }}>
+                  <div key={i} style={{ padding: '12px 10px 10px', background: '#F5F1EC', borderBottom: '2px solid #C9A84C', borderLeft: '1px solid #EDE8E0', fontSize: '0.8rem', fontWeight: 800, color: '#1F1D1B', lineHeight: 1.35, textAlign: 'center', position: 'sticky', top: 0, zIndex: 2 }}>
                     {trimAptName(d.fav.kaptName)}
                   </div>
                 ))}
