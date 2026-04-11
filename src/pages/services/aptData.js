@@ -327,8 +327,8 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
 
   for (const obj of rCandidates) {
     if (!rMatches(obj)) continue;
-    if (String(obj.cdealType || '').trim() !== '') continue;      // 취소 거래 제외
-    if (String(obj.dealingGbn || '').trim() === '직거래') continue; // 직거래 제외
+    if (String(obj.cdealType || '').trim() !== '') continue;      // 취소 거래: dot·avg 모두 제외
+    const isDirect = String(obj.dealingGbn || '').trim() === '직거래';
 
     const ar = toNum(obj.excluUseAr);
     if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > tol) continue;
@@ -342,10 +342,13 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     const fl = toNum(obj.floor);
     if (fl === 1 || fl === 2) amt *= 1.08;
 
-    if (!monthMap.has(ym)) monthMap.set(ym, { amounts: [], vol: 0 });
-    const rec = monthMap.get(ym);
-    rec.amounts.push(amt);
-    rec.vol += 1;
+    // 직거래는 평균가 계산에서 제외, dot은 찍음
+    if (!isDirect) {
+      if (!monthMap.has(ym)) monthMap.set(ym, { amounts: [], vol: 0 });
+      const rec = monthMap.get(ym);
+      rec.amounts.push(amt);
+      rec.vol += 1;
+    }
 
     rPtsX.push(ym);
     rPtsY.push(amt / 10000);
@@ -361,10 +364,9 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     const pdCandidates = pdNameIndex?.get(targetNorm) ?? pdWb;
 
     for (const obj of pdCandidates) {
-      // 취소된 거래 제외
+      // 취소된 거래: dot·avg 모두 제외
       if (toNum(obj.isCanceled) === 1) continue;
-      // 직거래 제외
-      if (String(obj.dealingGbn || '').trim() === '직거래') continue;
+      const isDirect = String(obj.dealingGbn || '').trim() === '직거래';
 
       // 아파트명 매칭
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
@@ -384,11 +386,13 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
       const fl = toNum(obj.floor);
       if (fl === 1 || fl === 2) amt *= 1.08;
 
-      // monthMap에 통합 (avg/vol 라인에 Pdata도 반영)
-      if (!monthMap.has(ym)) monthMap.set(ym, { amounts: [], vol: 0 });
-      const rec = monthMap.get(ym);
-      rec.amounts.push(amt);
-      rec.vol += 1;
+      // 직거래는 평균가 계산에서 제외, dot은 찍음
+      if (!isDirect) {
+        if (!monthMap.has(ym)) monthMap.set(ym, { amounts: [], vol: 0 });
+        const rec = monthMap.get(ym);
+        rec.amounts.push(amt);
+        rec.vol += 1;
+      }
 
       pPtsX.push(ym);
       pPtsY.push(amt / 10000);
