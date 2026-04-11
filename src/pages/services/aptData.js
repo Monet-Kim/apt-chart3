@@ -327,6 +327,8 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
 
   for (const obj of rCandidates) {
     if (!rMatches(obj)) continue;
+    if (String(obj.cdealType || '').trim() !== '') continue;      // 취소 거래 제외
+    if (String(obj.dealingGbn || '').trim() === '직거래') continue; // 직거래 제외
 
     const ar = toNum(obj.excluUseAr);
     if (!Number.isFinite(ar) || Math.abs(ar - areaNorm) > tol) continue;
@@ -361,6 +363,8 @@ export function aggregateTradesForArea({ wb, pdWb = null, pnu, kaptName = null, 
     for (const obj of pdCandidates) {
       // 취소된 거래 제외
       if (toNum(obj.isCanceled) === 1) continue;
+      // 직거래 제외
+      if (String(obj.dealingGbn || '').trim() === '직거래') continue;
 
       // 아파트명 매칭
       if (normAptNm(obj.aptNm) !== targetNorm) continue;
