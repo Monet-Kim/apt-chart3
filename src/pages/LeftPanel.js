@@ -331,6 +331,11 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
   const isFav = aptKey ? favApts.some(a => a.key === aptKey) : false;
 
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (selectedApt && scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [aptKey]);
+
   // 검색
   const [searchInput, setSearchInput] = useState('');
   const [suggestions, setSuggestions] = useState([]);
@@ -921,7 +926,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       )}
 
       {/* ── 콘텐츠 영역 ── */}
-      <div style={{
+      <div ref={scrollRef} style={{
         flex: 1,
         overflowY: 'auto',
         display: 'flex', flexDirection: 'column', gap: 14,
