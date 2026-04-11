@@ -147,7 +147,7 @@ function App() {
   ];
 
   // 패널 너비: 모바일 전체, 태블릿 420px, 데스크탑 440px
-  const panelWidth = isMobile ? '100vw' : isTablet ? '420px' : 'max(440px, min(520px, 42vw))';
+  const panelWidth = isMobile ? '100vw' : isTablet ? '420px' : 'max(640px, 42vw)';
 
   // 데스크탑: 사이드바가 열리면 지도 영역을 밀어냄
   const sidebarOpen = isDesktop && openPanel !== null;

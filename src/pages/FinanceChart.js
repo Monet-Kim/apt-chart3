@@ -383,7 +383,7 @@ const PriceChart = memo(function PriceChart({ selected, currency, yearWindow, is
 // 그래프2: 정규화 비교 차트 (다중 자산)
 // normMonthsAgo: 오늘로부터 N개월 전을 100% 기준으로
 // ────────────────────────────────────────────
-const NormChart = memo(function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobile, aptX = [], aptAvg = [], aptName = null, showApt = true }) {
+const NormChart = memo(function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobile, aptX = [], aptAvg = [], aptName = null, showApt = true, onNormChange }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRefs     = useRef([]);
@@ -401,6 +401,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg]   = useState('');
   const [tooltip, setTooltip] = useState(null);
+  const [dragX, setDragX]     = useState(null); // null=비드래그, number=드래그 중 X
 
   const [dynChartHeight, setDynChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
   const headerRef  = useRef(null);
@@ -409,6 +410,50 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
   useEffect(() => { normMonthsAgoRef.current = normMonthsAgo; }, [normMonthsAgo]);
   useEffect(() => { yearWindowRef.current    = yearWindow;    }, [yearWindow]);
   useEffect(() => { showAptRef.current       = showApt;       }, [showApt]);
+
+  const isDraggingFlag = dragX !== null;
+
+  const handleFlagMouseDown = useCallback((e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const getClientX = (ev) => ev.clientX ?? ev.touches?.[0]?.clientX;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setDragX(Math.max(0, Math.min(getClientX(e) - rect.left, rect.width)));
+
+    const onMove = (ev) => {
+      const cx = getClientX(ev);
+      if (cx == null) return;
+      const r = containerRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setDragX(Math.max(0, Math.min(cx - r.left, r.width)));
+    };
+    const onUp = (ev) => {
+      const cx = ev.clientX ?? ev.changedTouches?.[0]?.clientX;
+      if (cx != null && containerRef.current && chartRef.current) {
+        const r = containerRef.current.getBoundingClientRect();
+        const x = Math.max(0, Math.min(cx - r.left, r.width));
+        const time = chartRef.current.timeScale().coordinateToTime(x);
+        if (time) {
+          const d = typeof time === 'object'
+            ? new Date(time.year, time.month - 1, 1)
+            : new Date(time);
+          const now = new Date();
+          const months = Math.round((now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth()));
+          onNormChange?.(Math.max(0, months));
+        }
+      }
+      setDragX(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+  }, [onNormChange]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateBaseX = useCallback(() => {
     if (!baseTimeRef.current || !chartRef.current) return;
@@ -705,40 +750,38 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
         <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
         <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
 
-        {/* 수직 점선 — 기준점(100%) 표시 */}
-        {baseLineX != null && (
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            bottom: timeScaleHeight,
-            left: baseLineX,
-            width: 0,
-            borderLeft: '1.5px dashed #6B625B',
-            pointerEvents: 'none',
-            zIndex: 5,
-          }}>
-            <div style={{
-              position: 'absolute',
-              top: 7,
-              left: 0,
-              transform: 'translateX(-50%)',
-              background: 'rgba(107,98,91,0.75)',
-              color: '#fff',
-              fontSize: '0.68rem',
-              fontWeight: 700,
-              borderRadius: 4,
-              padding: '2px 6px',
-              textAlign: 'center',
-              lineHeight: 1.4,
-              whiteSpace: 'nowrap',
-            }}>
-              100%<br />
-              {baseTimeRef.current
-                ? (() => { const d = new Date(baseTimeRef.current); return `${d.getFullYear()}/${d.getMonth() + 1}`; })()
-                : ''}
+        {/* 수직 점선 — 기준점(100%), 드래그 가능 */}
+        {(baseLineX != null || isDraggingFlag) && (() => {
+          const displayX = isDraggingFlag ? dragX : baseLineX;
+          return (
+            <div
+              onMouseDown={handleFlagMouseDown}
+              onTouchStart={handleFlagMouseDown}
+              style={{
+                position: 'absolute', top: 0, bottom: timeScaleHeight,
+                left: displayX - 10, width: 20,
+                cursor: isDraggingFlag ? 'grabbing' : 'ew-resize',
+                zIndex: 15, userSelect: 'none',
+              }}
+            >
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 0, borderLeft: '1.5px dashed #6B625B', pointerEvents: 'none' }} />
+              <div style={{
+                position: 'absolute', top: 7, left: '50%',
+                transform: 'translateX(-50%)',
+                background: 'rgba(107,98,91,0.75)', color: '#fff',
+                fontSize: '0.68rem', fontWeight: 700,
+                borderRadius: 4, padding: '2px 6px',
+                textAlign: 'center', lineHeight: 1.4, whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+              }}>
+                100%<br />
+                {baseTimeRef.current
+                  ? (() => { const d = new Date(baseTimeRef.current); return `${d.getFullYear()}/${d.getMonth() + 1}`; })()
+                  : ''}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* 툴팁 */}
@@ -1015,7 +1058,7 @@ export default function FinanceChart({ isMobile = false, aptX = [], aptAvg = [],
             >+3월</button>
           </div>
         </div>
-        <NormChart selected={selected} currency={currency} yearWindow={yearWindow} normMonthsAgo={normMonthsAgo} isMobile={isMobile} aptX={aptX} aptAvg={aptAvg} aptName={aptName} showApt={showApt} />
+        <NormChart selected={selected} currency={currency} yearWindow={yearWindow} normMonthsAgo={normMonthsAgo} isMobile={isMobile} aptX={aptX} aptAvg={aptAvg} aptName={aptName} showApt={showApt} onNormChange={(months) => { setNormMonthsAgo(months); if (months / 12 >= yearWindow) setYearWindow(Math.ceil(months / 12) + 1); }} />
       </div>
 
       {/* 그래프2,3,4: 금리 자산 합산 + 일반 자산 개별 차트 */}
