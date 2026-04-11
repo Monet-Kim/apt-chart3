@@ -354,6 +354,9 @@ const PriceChart = memo(function PriceChart({ selected, currency, yearWindow, is
       {errMsg && <div style={{ padding: '8px 10px', color: '#c33', fontSize: '0.82rem' }}>{errMsg}</div>}
 
       <div ref={containerRef} style={{ width: '100%', height: chartHeight, background: '#F5F2EE', borderRadius: 8 }} />
+      {/* 스크롤 양보 오버레이 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
+      <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
 
       {tooltip && (
         <div style={{ position: 'absolute', top: 8, left: 8, background: 'rgba(31,29,27,0.88)', color: '#fff', borderRadius: 8, padding: '5px 10px', fontSize: '0.78rem', fontWeight: 700, pointerEvents: 'none', zIndex: 20, lineHeight: 1.8 }}>
@@ -698,6 +701,9 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
       {/* 차트 + 수직 기준선 overlay */}
       <div style={{ position: 'relative', width: '100%' }}>
         <div ref={containerRef} style={{ width: '100%', height: dynChartHeight, background: '#F5F2EE', borderRadius: 8 }} />
+        {/* 스크롤 양보 오버레이 */}
+        <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
+        <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
 
         {/* 수직 점선 — 기준점(100%) 표시 */}
         {baseLineX != null && (

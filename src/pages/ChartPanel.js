@@ -291,6 +291,9 @@ function MultiSeriesTradeChart({ series, isMobile }) {
     <div style={{ position: 'relative', width: '100%', height: chartHeight, overflow: 'hidden' }}>
       <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
       <svg ref={svgRef} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', zIndex: 5 }} />
+      {/* 스크롤 양보 오버레이 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
+      <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
       {tooltip && Object.keys(tooltip.vals).length > 0 && (
         <div style={{
           position: 'absolute', top: 36, left: 8,
@@ -476,6 +479,9 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
   return (
     <div style={{ position: 'relative', width: '100%', overflow: 'hidden' }}>
       <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
+      {/* 스크롤 양보 오버레이 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
+      <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
 
       {/* 공통 기준점 수직 점선 (FinanceChart 동일 스타일) */}
       {baseLineX != null && (
@@ -1184,12 +1190,12 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               })}
             </div>
             {/* 하단 버튼 */}
-            <div style={{ display: 'flex', gap: 8, padding: '12px 20px 16px', borderTop: '1px solid #EDE8E0', flexShrink: 0 }}>
-              <button onClick={() => setShowSelectModal(false)} style={{ flex: 1, height: 38, borderRadius: 8, border: '1.5px solid #E6DED4', background: '#fff', color: '#6B625B', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' }}>취소</button>
+            <div style={{ display: 'flex', gap: 8, padding: '8px 20px 12px', borderTop: '1px solid #EDE8E0', flexShrink: 0 }}>
+              <button onClick={() => setShowSelectModal(false)} style={{ flex: 1, height: 30, padding: '0 10px', borderRadius: 8, border: '1.5px solid #E6DED4', background: '#fff', color: '#6B625B', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}>취소</button>
               <button
                 disabled={selectedKeys.length < 2 || compareLoading}
                 onClick={() => loadCompareData(selectedKeys)}
-                style={{ flex: 2, height: 38, borderRadius: 8, border: 'none', background: selectedKeys.length >= 2 ? '#C9A84C' : '#E6DED4', color: selectedKeys.length >= 2 ? '#fff' : '#B4AFA8', fontSize: '0.82rem', fontWeight: 700, cursor: selectedKeys.length >= 2 && !compareLoading ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'background 0.15s' }}
+                style={{ flex: 2, height: 30, padding: '0 10px', borderRadius: 8, border: 'none', background: selectedKeys.length >= 2 ? '#C9A84C' : '#E6DED4', color: selectedKeys.length >= 2 ? '#fff' : '#B4AFA8', fontSize: '0.78rem', fontWeight: 700, cursor: selectedKeys.length >= 2 && !compareLoading ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'background 0.15s' }}
               >
                 {compareLoading ? (
                   <><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>불러오는 중…</>

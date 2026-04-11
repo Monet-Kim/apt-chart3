@@ -318,6 +318,9 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
           zIndex: 5,
         }}
       />
+      {/* 스크롤 양보 오버레이: canvas 위에 올려 wheel/touch를 부모로 버블업 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: 52, height: '100%', zIndex: 10 }} />
+      <div style={{ position: 'absolute', top: 0, right: 0, width: 16, height: '100%', zIndex: 10 }} />
     </div>
   );
 }
