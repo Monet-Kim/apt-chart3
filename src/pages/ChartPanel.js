@@ -5,7 +5,6 @@ import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { createChart, LineSeries } from 'lightweight-charts';
 import { ymToDate } from '../utils/dateUtils';
-import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea, groupAreasToRep, normAptNm,
@@ -675,7 +674,6 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
   const [compareData, setCompareData]         = useState(null);
   const [compareBtnActive, setCompareBtnActive] = useState(false);
 
-  const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: onAreaMouseUp } = useAreaDragScroll();
 
   const activeFav = useMemo(() => favApts.find((a) => a.key === activeKey), [favApts, activeKey]);
 
@@ -981,21 +979,10 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
                   <span style={{ color: '#C9BFB4' }}>· 중복선택가능</span>
                 </div>
                 <div
-                  ref={areaScrollRef}
-                  className="chart-area-tab-scroll"
-                  onMouseDown={onAreaMouseDown}
-                  onMouseMove={onAreaMouseMove}
-                  onMouseUp={onAreaMouseUp}
-                  onMouseLeave={onAreaMouseUp}
                   style={{
-                    display: 'flex', gap: 0,
-                    overflowX: 'auto', overflowY: 'visible',
+                    display: 'flex', gap: 0, flexWrap: 'wrap',
                     borderBottom: '1px solid #E6DED4',
-                    cursor: dragRef.current?.down ? 'grabbing' : 'grab',
-                    userSelect: 'none', touchAction: 'pan-x',
                     paddingBottom: 4,
-                    marginLeft: isMobile ? -26.5 : isTablet ? -30.5 : -34.5,
-                    paddingLeft: isMobile ? 26.5 : isTablet ? 30.5 : 34.5,
                   }}
                 >
                   {loadingKey === activeKey ? (
