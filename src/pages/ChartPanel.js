@@ -968,7 +968,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             {/* 면적 선택 */}
             {activeFav ? (
               <div style={{ flexShrink: 0 }}>
-                <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                   <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: '#C9BFB4' }} />
                   전용면적 선택
                   {(() => {
