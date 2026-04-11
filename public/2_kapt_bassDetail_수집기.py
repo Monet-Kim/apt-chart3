@@ -169,16 +169,19 @@ def fetch_detail(kapt_code: str) -> dict | None:
 #  워커 스레드
 # ══════════════════════════════════════════════════════════════════
 class CollectorWorker(QThread):
-    s_log    = pyqtSignal(str, str)
-    s_prog1  = pyqtSignal(int, int, str)
-    s_prog2  = pyqtSignal(int, int)
-    s_done   = pyqtSignal(str)
+    s_log      = pyqtSignal(str, str)
+    s_prog1    = pyqtSignal(int, int, str)
+    s_prog2    = pyqtSignal(int, int)
+    s_api_cnt  = pyqtSignal(int)   # API 호출 횟수 → g_api 게이지
+    s_r2_cnt   = pyqtSignal(int)   # R2 업로드 횟수 → g_r2 게이지
+    s_done     = pyqtSignal(str)
 
-    def __init__(self, start_step: int = 1, end_step: int = 2):
+    def __init__(self, start_step: int = 1, end_step: int = 2, incremental: bool = False):
         super().__init__()
-        self._stop      = False
-        self.start_step = start_step
-        self.end_step   = end_step
+        self._stop       = False
+        self.start_step  = start_step
+        self.end_step    = end_step
+        self.incremental = incremental
         self.n_called = self.n_new = self.n_updated = self.n_skip = self.n_fail = 0
         self.n_upload = 0
 
@@ -188,7 +191,7 @@ class CollectorWorker(QThread):
         try:
             for step in range(self.start_step, self.end_step + 1):
                 if self._stop: break
-                if   step == 1: self._step1()
+                if   step == 1: self._step1_incremental() if self.incremental else self._step1()
                 elif step == 2: self._step2()
             summary = (
                 f"완료  │  API {self.n_called:,}회  │  신규 {self.n_new:,}건"
@@ -232,6 +235,7 @@ class CollectorWorker(QThread):
                 time.sleep(SLEEP_SEC)
                 item = fetch_detail(code)
                 self.n_called += 1
+                self.s_api_cnt.emit(self.n_called)
                 processed += 1
                 self.s_prog2.emit(processed, total_all)
 
@@ -250,6 +254,72 @@ class CollectorWorker(QThread):
                 if processed % 500 == 0:
                     self.s_log.emit(
                         f"  … {processed:,}/{total_all:,} | 신규 {self.n_new:,} 업데이트 {self.n_updated:,} skip {self.n_skip:,}", "data")
+
+            if modified:
+                save_csv(dst, existing)
+                self.s_log.emit(f"  ✅ {dst.name} 저장 완료 ({len(existing):,}건)", "ok")
+
+    # ── Step 1-B: 증분 수집 (Detail에 없는 신규 kaptCode만 추가) ──
+    def _step1_incremental(self):
+        self.s_log.emit("══ Step 1 [증분]: Detail에 없는 신규 kaptCode만 추가 ══", "header")
+        self.s_log.emit("   ※ 기존 Detail 파일이 있으면 List와 비교, 누락된 코드만 API 호출", "info")
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        src_files = list_input_files()
+        if not src_files:
+            self.s_log.emit(f"⚠ {INPUT_DIR} 에 *_list_coord.csv 파일이 없습니다.", "warn"); return
+
+        # 신규 코드 총합 먼저 집계 (진행률 표시용)
+        plan = []
+        for src in src_files:
+            codes    = read_kapt_codes(src)
+            dst      = output_path(src)
+            existing = load_existing(dst)
+            new_codes = [c for c in codes if c not in existing]
+            plan.append((src, codes, dst, existing, new_codes))
+
+        total_new = sum(len(p[4]) for p in plan)
+        self.s_log.emit(
+            f"📂 {len(src_files)}개 파일 | 신규 kaptCode {total_new:,}건 (전체 {sum(len(p[1]) for p in plan):,}건 중)",
+            "ok")
+        self.s_prog2.emit(0, max(total_new, 1))
+
+        processed = 0
+        for fi, (src, _, dst, existing, new_codes) in enumerate(plan, 1):
+            if self._stop: break
+            self.s_prog1.emit(fi, len(plan), src.name)
+
+            if not new_codes:
+                self.s_log.emit(f"  ⏭ {src.name} — 신규 없음, skip", "skip")
+                continue
+
+            self.s_log.emit(
+                f"📄 {src.name}  (기존 {len(existing):,}건 | 신규 {len(new_codes):,}건 추가 예정)", "info")
+            modified = False
+
+            for code in new_codes:
+                if self._stop: break
+                if self.n_called >= DAILY_LIMIT:
+                    self.s_log.emit(f"⚠ 일일 한도 {DAILY_LIMIT:,}회 도달. 중단.", "warn")
+                    self._stop = True; break
+
+                time.sleep(SLEEP_SEC)
+                item = fetch_detail(code)
+                self.n_called += 1
+                self.s_api_cnt.emit(self.n_called)
+                processed += 1
+                self.s_prog2.emit(processed, max(total_new, 1))
+
+                if item is None:
+                    self.n_fail += 1
+                    self.s_log.emit(f"  ✗ {code} — API 응답 없음", "warn"); continue
+
+                existing[code] = item_to_row(item)
+                self.n_new += 1
+                modified = True
+
+                if processed % 200 == 0:
+                    self.s_log.emit(
+                        f"  … {processed:,}/{total_new:,} | 신규 추가 {self.n_new:,}건 | 실패 {self.n_fail:,}건", "data")
 
             if modified:
                 save_csv(dst, existing)
@@ -286,6 +356,7 @@ class CollectorWorker(QThread):
                 s3.upload_file(str(fp), R2_BUCKET, key)
 
                 uploaded += 1; self.n_upload += 1
+                self.s_r2_cnt.emit(self.n_upload)
                 self.s_log.emit(f"  ↑ {fp.name}", "data")
 
             self.s_log.emit(f"  ✅ 업로드 완료  (신규/갱신: {uploaded}개 / 건너뜀: {skipped}개)", "ok")
@@ -373,28 +444,47 @@ class MainWindow(QMainWindow):
 
         prog_v.addStretch()
 
-        # 단계별 버튼
+        # ── 전체 수집 (모든 kaptCode API 호출, 변경분 업데이트)
+        lbl_full = QLabel("● 전체 수집 — 모든 kaptCode API 호출 후 변경분 업데이트")
+        lbl_full.setStyleSheet("color:#4a6a9a; font-size:9px; padding:4px 0 1px 0;")
+        prog_v.addWidget(lbl_full)
         step_row = QHBoxLayout()
         step_row.setSpacing(4)
         self.btn_collect = self._btn("수집", "#1864ab", "#1451a0")
         self.btn_r2      = self._btn("R2 업로드", "#862e9c", "#6d2580")
-        for b in (self.btn_collect, self.btn_r2):
+        self.btn_all     = self._btn("▶  전체실행 (수집+R2)", "#0b7285", "#09636e")
+        for b in (self.btn_collect, self.btn_r2, self.btn_all):
             b.setFixedHeight(32); step_row.addWidget(b)
         prog_v.addLayout(step_row)
 
-        # 일괄 버튼
-        bulk_row = QHBoxLayout()
-        bulk_row.setSpacing(4)
-        self.btn_all  = self._btn("▶  전체실행", "#0b7285", "#09636e")
+        prog_v.addWidget(self._sep())
+
+        # ── 증분 수집 (Detail에 없는 신규 kaptCode만 추가)
+        lbl_incr = QLabel("● 증분 수집 — Detail 파일과 비교, 누락된 신규 kaptCode만 API 호출")
+        lbl_incr.setStyleSheet("color:#4a7a4a; font-size:9px; padding:4px 0 1px 0;")
+        prog_v.addWidget(lbl_incr)
+        incr_row = QHBoxLayout()
+        incr_row.setSpacing(4)
+        self.btn_incr     = self._btn("신규 추가", "#2b6e2b", "#235c23")
+        self.btn_incr_all = self._btn("▶  증분실행 (신규추가+R2)", "#2e6b5e", "#255a4e")
+        for b in (self.btn_incr, self.btn_incr_all):
+            b.setFixedHeight(32); incr_row.addWidget(b)
+        prog_v.addLayout(incr_row)
+
+        prog_v.addWidget(self._sep())
+
+        # ── 중지
+        stop_row = QHBoxLayout()
         self.btn_stop = self._btn("■  중지", "#c92a2a", "#a61e1e")
         self.btn_stop.setEnabled(False)
-        bulk_row.addWidget(self.btn_all)
-        bulk_row.addWidget(self.btn_stop)
-        prog_v.addLayout(bulk_row)
+        stop_row.addWidget(self.btn_stop)
+        prog_v.addLayout(stop_row)
 
         self.btn_collect.clicked.connect(lambda: self._on_start(1, 1))
         self.btn_r2.clicked.connect(lambda: self._on_start(2, 2))
         self.btn_all.clicked.connect(lambda: self._on_start(1, 2))
+        self.btn_incr.clicked.connect(lambda: self._on_start(1, 1, incremental=True))
+        self.btn_incr_all.clicked.connect(lambda: self._on_start(1, 2, incremental=True))
         self.btn_stop.clicked.connect(self._on_stop)
         mid.addWidget(prog_gb, 5)
 
@@ -440,11 +530,11 @@ class MainWindow(QMainWindow):
         return b
 
     def _set_btns_enabled(self, enabled):
-        for b in (self.btn_collect, self.btn_r2, self.btn_all):
+        for b in (self.btn_collect, self.btn_r2, self.btn_all, self.btn_incr, self.btn_incr_all):
             b.setEnabled(enabled)
         self.btn_stop.setEnabled(not enabled)
 
-    def _on_start(self, start_step, end_step):
+    def _on_start(self, start_step, end_step, incremental=False):
         self._set_btns_enabled(False)
         labels = {1: "수집", 2: "R2업로드"}
         rng = " → ".join(labels[s] for s in range(start_step, end_step + 1))
@@ -452,10 +542,12 @@ class MainWindow(QMainWindow):
         self.lbl_phase.setText(rng)
         self.lbl_phase.setStyleSheet("color:#4c7cf3; background:#1a2040; border-radius:6px; padding:4px 10px; font-weight:bold; font-size:12px;")
 
-        self.worker = CollectorWorker(start_step, end_step)
+        self.worker = CollectorWorker(start_step, end_step, incremental=incremental)
         self.worker.s_log.connect(self._log)
         self.worker.s_prog1.connect(self._on_prog1)
         self.worker.s_prog2.connect(self._on_prog2)
+        self.worker.s_api_cnt.connect(self.g_api.set_value)
+        self.worker.s_r2_cnt.connect(self.g_r2.set_value)
         self.worker.s_done.connect(self._on_done)
         self.worker.start()
 

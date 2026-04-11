@@ -643,6 +643,9 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
 
       if (!list.length) return;
       setAreasByKey(prev => ({ ...prev, [fav.key]: list }));
+      if (fav.hotAreas?.length) {
+        setHotAreasByKey(prev => ({ ...prev, [fav.key]: fav.hotAreas }));
+      }
       const areaNorm = Math.round(hotArea * 10) / 10;
       const id = `${fav.key}#${areaNorm}`;
 
