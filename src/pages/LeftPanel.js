@@ -440,7 +440,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
         const csvRes = await fetch(fileName, { cache: 'no-store' });
         if (!csvRes.ok) return;
-        const { parseCSV } = await import('../utils/csvUtils');
+        const { parseCSV } = await import('../styles/csvUtils');
         const rows = parseCSV(await csvRes.text()).map(row => ({
           ...row,
           위도: parseFloat(row['위도']),
