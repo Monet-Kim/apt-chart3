@@ -1,8 +1,8 @@
 // src/pages/Mainmap.js
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Map as KakaoMap, CustomOverlayMap } from 'react-kakao-maps-sdk';
-import { parseCSV } from '../utils/csvUtils';
-import { trimAptName } from '../utils/aptNameUtils';
+import { parseCSV } from '../styles/csvUtils';
+import { trimAptName } from '../styles/aptNameUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea,

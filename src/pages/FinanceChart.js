@@ -4,7 +4,7 @@
 // 그래프2: 정규화(%) 비교
 
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { getChartHeight } from '../utils/chartHeight';
+import { getChartHeight } from '../styles/chartHeight';
 import { createChart, LineSeries } from 'lightweight-charts';
 
 const aptNameKeyframes = `

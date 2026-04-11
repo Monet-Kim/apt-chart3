@@ -2,9 +2,9 @@
 import FinanceChart from './FinanceChart';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
-import { ymToDate, dateToISOYM } from '../utils/dateUtils';
-import { getChartHeight } from '../utils/chartHeight';
-import { trimAptName } from '../utils/aptNameUtils';
+import { ymToDate, dateToISOYM } from '../styles/dateUtils';
+import { getChartHeight } from '../styles/chartHeight';
+import { trimAptName } from '../styles/aptNameUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata, fetchKaptDetail, listAreasForPnu,
   aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,

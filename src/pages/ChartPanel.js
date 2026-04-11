@@ -4,15 +4,15 @@ import html2canvas from 'html2canvas';
 import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { createChart, LineSeries } from 'lightweight-charts';
-import { getChartHeight } from '../utils/chartHeight';
-import { ymToDate } from '../utils/dateUtils';
+import { getChartHeight } from '../styles/chartHeight';
+import { ymToDate } from '../styles/dateUtils';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea, groupAreasToRep, normAptNm,
   fetchKaptDetail,
 } from './services/aptData';
-import { trimAptName } from '../utils/aptNameUtils';
-import { buildAptInfoPairs } from '../utils/aptInfoPairs';
+import { trimAptName } from '../styles/aptNameUtils';
+import { buildAptInfoPairs } from '../styles/aptInfoPairs';
 
 // ────────────────────────────────────────────
 // 상수
