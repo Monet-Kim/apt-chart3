@@ -178,6 +178,7 @@ function App() {
                 addFavoriteApt={addFavoriteApt}
                 removeFavoriteApt={removeFavoriteApt}
                 onOpenChartPanel={() => togglePanel('chart')}
+                onClose={() => setOpenPanel(null)}
                 isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
               />
             </div>
@@ -268,6 +269,7 @@ function App() {
                 addFavoriteApt={addFavoriteApt}
                 removeFavoriteApt={removeFavoriteApt}
                 onOpenChartPanel={() => togglePanel('chart')}
+                onClose={() => setOpenPanel(null)}
                 isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
               />
             </div>

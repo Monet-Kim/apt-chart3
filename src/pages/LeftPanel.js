@@ -324,7 +324,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
 // ────────────────────────────────────────────
 // 메인 컴포넌트
 // ────────────────────────────────────────────
-function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, isMobile = false, isTablet = false }) {
+function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, onClose, isMobile = false, isTablet = false }) {
   const aptKey = selectedApt
     ? `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`
     : null;
@@ -755,9 +755,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         <div style={{ flex: 1, minWidth: 0 }}>
           {selectedApt ? (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#1F1D1B' }}>
-              <span style={{ color: '#6B625B', flexShrink: 0 }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={20} height={20}>
-                  <path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/>
+              <span
+                style={{ color: '#6B625B', flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
+                onClick={(isMobile || isTablet) ? onClose : undefined}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <rect x="2" y="6" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.8"/>
+                  <line x1="2" y1="13" x2="22" y2="13" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+                  <line x1="10" y1="6" x2="10" y2="22" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+                  <path d="M16 0C13.2 0 11 2.2 11 5c0 3.5 5 9 5 9s5-5.5 5-9c0-2.8-2.2-5-5-5z" fill="currentColor"/>
+                  <circle cx="16" cy="5" r="1.8" fill="white"/>
                 </svg>
               </span>
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -766,9 +773,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
             </span>
           ) : (
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#C9BFB4' }}>
-              <span style={{ flexShrink: 0 }}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={20} height={20}>
-                  <path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/>
+              <span
+                style={{ flexShrink: 0, cursor: (isMobile || isTablet) ? 'pointer' : 'default' }}
+                onClick={(isMobile || isTablet) ? onClose : undefined}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <rect x="2" y="6" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.8"/>
+                  <line x1="2" y1="13" x2="22" y2="13" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+                  <line x1="10" y1="6" x2="10" y2="22" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+                  <path d="M16 0C13.2 0 11 2.2 11 5c0 3.5 5 9 5 9s5-5.5 5-9c0-2.8-2.2-5-5-5z" fill="currentColor"/>
+                  <circle cx="16" cy="5" r="1.8" fill="white"/>
                 </svg>
               </span>
               아파트를 선택하세요
