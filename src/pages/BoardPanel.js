@@ -40,295 +40,19 @@ const closeBtn = {
   color: '#6B625B', fontWeight: 600, fontSize: '0.88rem',
   padding: '4px 6px 4px 2px', borderRadius: 8, flexShrink: 0,
 };
-const IconImage  = () => <SVG size={16}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></SVG>;
 const IconTrash  = () => <SVG size={16}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></SVG>;
 
-/* ── 툴바 버튼 ── */
-const ToolbarBtn = ({ onMouseDown, active, title, children }) => (
-  <button
-    type="button"
-    title={title}
-    onMouseDown={onMouseDown}
-    style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      width: 30, height: 30, border: 'none', borderRadius: 6,
-      background: active ? '#E6DED4' : 'transparent',
-      color: active ? '#3D3530' : '#6B625B',
-      cursor: 'pointer', fontSize: '0.82rem', fontWeight: 700,
-      transition: 'background 0.12s',
-      flexShrink: 0,
-    }}
-    onMouseEnter={e => { if (!active) e.currentTarget.style.background = '#EEE8E0'; }}
-    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
-  >
-    {children}
-  </button>
-);
-
-const Divider = () => (
-  <div style={{ width: 1, height: 18, background: '#E6DED4', margin: '0 2px', flexShrink: 0 }} />
-);
-
-/* ── HTML WYSIWYG 에디터 ── */
-function RichEditor({ value, onChange }) {
-  const editorRef  = useRef();
-  const fileInputRef = useRef();
-  const [activeFormats, setActiveFormats] = useState({});
-  const [fontSize, setFontSize] = useState(14);
-  const imgCountRef = useRef(0);
-
-  // 이미지 개수 계산
-  const countImages = () => {
-    if (!editorRef.current) return 0;
-    return editorRef.current.querySelectorAll('img').length;
-  };
-
-  // 포커스 상태 추적
-  const updateActiveFormats = () => {
-    setActiveFormats({
-      bold:      document.queryCommandState('bold'),
-      italic:    document.queryCommandState('italic'),
-      underline: document.queryCommandState('underline'),
-      ul:        document.queryCommandState('insertUnorderedList'),
-      ol:        document.queryCommandState('insertOrderedList'),
-    });
-  };
-
-  const exec = (cmd, val = null) => {
-    document.execCommand(cmd, false, val);
-    editorRef.current?.focus();
-    updateActiveFormats();
-  };
-
-  const handleInput = () => {
-    onChange(editorRef.current.innerHTML);
-    updateActiveFormats();
-  };
-
-  const handleKeyUp = () => updateActiveFormats();
-  const handleMouseUp = () => updateActiveFormats();
-
-  const changeFontSize = (delta) => {
-    editorRef.current?.focus();
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) {
-      // 선택된 텍스트 → execCommand 트릭으로 font 태그 삽입 후 span으로 교체
-      document.execCommand('fontSize', false, '7');
-      editorRef.current?.querySelectorAll('font[size="7"]').forEach(el => {
-        const current = parseFloat(window.getComputedStyle(el).fontSize) || fontSize;
-        const next = Math.max(8, Math.min(40, current + delta));
-        const span = document.createElement('span');
-        span.style.fontSize = `${next}px`;
-        while (el.firstChild) span.appendChild(el.firstChild);
-        el.replaceWith(span);
-      });
-      onChange(editorRef.current.innerHTML);
-    } else {
-      // 선택 없음 → 에디터 기본 크기 변경
-      setFontSize(prev => {
-        const next = Math.max(8, Math.min(40, prev + delta));
-        if (editorRef.current) editorRef.current.style.fontSize = `${next}px`;
-        return next;
-      });
-    }
-  };
-
-  const insertImage = (src) => {
-    editorRef.current?.focus();
-    document.execCommand('insertHTML', false,
-      `<img src="${src}" style="max-width:100%;max-height:400px;object-fit:contain;border-radius:8px;display:block;margin:6px 0;" />`
-    );
-    onChange(editorRef.current.innerHTML);
-  };
-
-  const handlePaste = (e) => {
-    const file = e.clipboardData?.files?.[0];
-    if (!file?.type.startsWith('image/')) return;
-    e.preventDefault();
-    if (countImages() >= 5) { alert('이미지는 최대 5개까지 첨부할 수 있습니다.'); return; }
-    const reader = new FileReader();
-    reader.onload = (evt) => insertImage(evt.target.result);
-    reader.readAsDataURL(file);
-  };
-
-  const handleFileChange = (e) => {
-    const files = Array.from(e.target.files);
-    for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (countImages() >= 5) { alert('이미지는 최대 5개까지 첨부할 수 있습니다.'); break; }
-      const reader = new FileReader();
-      reader.onload = (evt) => insertImage(evt.target.result);
-      reader.readAsDataURL(file);
-    }
-    e.target.value = '';
-  };
-
-  // 초기값 세팅 (한 번만)
-  const initializedRef = useRef(false);
-  useEffect(() => {
-    if (!initializedRef.current && editorRef.current) {
-      editorRef.current.innerHTML = value || '';
-      initializedRef.current = true;
-    }
-  }, []);
-
-  const imgCount = countImages();
-
-  return (
-    <div style={{
-      border: '1.5px solid #E6DED4', borderRadius: 10,
-      background: '#fff', overflow: 'hidden',
-      display: 'flex', flexDirection: 'column',
-    }}>
-      {/* 툴바 */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 2,
-        padding: '6px 10px', borderBottom: '1.5px solid #E6DED4',
-        background: '#F7F3EE', flexWrap: 'wrap',
-      }}>
-        {/* 텍스트 서식 */}
-        <ToolbarBtn title="굵게 (Ctrl+B)" active={activeFormats.bold}
-          onMouseDown={e => { e.preventDefault(); exec('bold'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="currentColor"><path d="M6 4h8a4 4 0 010 8H6V4zm0 8h9a4 4 0 010 8H6v-8z"/></svg>
-        </ToolbarBtn>
-        <ToolbarBtn title="기울임 (Ctrl+I)" active={activeFormats.italic}
-          onMouseDown={e => { e.preventDefault(); exec('italic'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="currentColor"><path d="M10 4h4l-4 16H6l4-16zm4 0h4v2h-4V4zm-8 14H2v2h4v-2z"/></svg>
-        </ToolbarBtn>
-        <ToolbarBtn title="밑줄 (Ctrl+U)" active={activeFormats.underline}
-          onMouseDown={e => { e.preventDefault(); exec('underline'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="currentColor"><path d="M6 3v7a6 6 0 0012 0V3h-2v7a4 4 0 01-8 0V3H6zm-2 16v2h16v-2H4z"/></svg>
-        </ToolbarBtn>
-
-        <Divider />
-
-        {/* 헤딩 */}
-        <ToolbarBtn title="제목 1" onMouseDown={e => { e.preventDefault(); exec('formatBlock', '<h2>'); }}>
-          <span style={{ fontWeight: 800, fontSize: '0.7rem', letterSpacing: '-0.5px' }}>H1</span>
-        </ToolbarBtn>
-        <ToolbarBtn title="제목 2" onMouseDown={e => { e.preventDefault(); exec('formatBlock', '<h3>'); }}>
-          <span style={{ fontWeight: 800, fontSize: '0.7rem', letterSpacing: '-0.5px' }}>H2</span>
-        </ToolbarBtn>
-        <ToolbarBtn title="본문" onMouseDown={e => { e.preventDefault(); exec('formatBlock', '<p>'); }}>
-          <span style={{ fontSize: '0.7rem' }}>본문</span>
-        </ToolbarBtn>
-
-        <Divider />
-
-        {/* 목록 */}
-        <ToolbarBtn title="글머리 목록" active={activeFormats.ul}
-          onMouseDown={e => { e.preventDefault(); exec('insertUnorderedList'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/>
-            <circle cx="4" cy="6" r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="4" cy="12" r="1.2" fill="currentColor" stroke="none"/>
-            <circle cx="4" cy="18" r="1.2" fill="currentColor" stroke="none"/>
-          </svg>
-        </ToolbarBtn>
-        <ToolbarBtn title="번호 목록" active={activeFormats.ol}
-          onMouseDown={e => { e.preventDefault(); exec('insertOrderedList'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="10" y1="6" x2="20" y2="6"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="18" x2="20" y2="18"/>
-            <text x="2" y="8" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold">1.</text>
-            <text x="2" y="14" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold">2.</text>
-            <text x="2" y="20" fontSize="6" fill="currentColor" stroke="none" fontWeight="bold">3.</text>
-          </svg>
-        </ToolbarBtn>
-
-        <Divider />
-
-        {/* 글자 크기 */}
-        <ToolbarBtn title="글자 크게" onMouseDown={e => { e.preventDefault(); changeFontSize(2); }}>
-          <span style={{ fontWeight: 800, fontSize: '0.82rem', letterSpacing: '-0.5px' }}>A+</span>
-        </ToolbarBtn>
-        <ToolbarBtn title="글자 작게" onMouseDown={e => { e.preventDefault(); changeFontSize(-2); }}>
-          <span style={{ fontWeight: 800, fontSize: '0.68rem', letterSpacing: '-0.5px' }}>A-</span>
-        </ToolbarBtn>
-
-        <Divider />
-
-        {/* 정렬 */}
-        <ToolbarBtn title="왼쪽 정렬" onMouseDown={e => { e.preventDefault(); exec('justifyLeft'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/>
-          </svg>
-        </ToolbarBtn>
-        <ToolbarBtn title="가운데 정렬" onMouseDown={e => { e.preventDefault(); exec('justifyCenter'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
-          </svg>
-        </ToolbarBtn>
-
-        <Divider />
-
-        {/* 이미지 */}
-        <ToolbarBtn title={imgCount >= 5 ? '이미지 최대 5개' : '이미지 추가'}
-          onMouseDown={e => { e.preventDefault(); if (imgCount < 5) fileInputRef.current.click(); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-            <polyline points="21 15 16 10 5 21"/>
-          </svg>
-        </ToolbarBtn>
-        {imgCount > 0 && (
-          <span style={{ fontSize: '0.72rem', color: '#9E9590', marginLeft: 2 }}>{imgCount}/5</span>
-        )}
-
-        <Divider />
-
-        {/* 실행 취소 / 재실행 */}
-        <ToolbarBtn title="실행 취소" onMouseDown={e => { e.preventDefault(); exec('undo'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 00-4-4H4"/>
-          </svg>
-        </ToolbarBtn>
-        <ToolbarBtn title="다시 실행" onMouseDown={e => { e.preventDefault(); exec('redo'); }}>
-          <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 014-4h12"/>
-          </svg>
-        </ToolbarBtn>
-      </div>
-
-      {/* 편집 영역 */}
-      <div
-        ref={editorRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={handleInput}
-        onKeyUp={handleKeyUp}
-        onMouseUp={handleMouseUp}
-        onPaste={handlePaste}
-        data-placeholder="내용을 입력하세요 (이미지 붙여넣기 가능)"
-        style={{
-          minHeight: 180, padding: '14px 16px',
-          outline: 'none', lineHeight: 1.7,
-          fontSize: `${fontSize}px`, color: '#1F1D1B',
-          fontFamily: 'inherit', flex: 1,
-          overflowY: 'auto', textAlign: 'left',
-        }}
-      />
-
-      {/* placeholder CSS */}
-      <style>{`
-        [contenteditable][data-placeholder]:empty::before {
-          content: attr(data-placeholder);
-          color: #C9BFB4;
-          pointer-events: none;
-        }
-        [contenteditable] h2 { font-size: 1.2rem; font-weight: 800; margin: 10px 0 4px; color: #1F1D1B; }
-        [contenteditable] h3 { font-size: 1.05rem; font-weight: 700; margin: 8px 0 4px; color: #1F1D1B; }
-        [contenteditable] p  { margin: 4px 0; }
-        [contenteditable] ul, [contenteditable] ol { padding-left: 1.4em; margin: 4px 0; }
-        [contenteditable] li { margin: 2px 0; }
-      `}</style>
-
-      <input
-        type="file" accept="image/*" multiple
-        ref={fileInputRef} style={{ display: 'none' }}
-        onChange={handleFileChange}
-      />
-    </div>
-  );
+/* ── HTML → 평문 변환 (글 수정 시 사용) ── */
+function htmlToText(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>|<\/div>|<\/h[1-6]>/gi, '\n')
+    .replace(/<img[^>]*>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .trim();
 }
 
 /* ── 상세보기 HTML 렌더링 ── */
@@ -375,7 +99,8 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
   const [showForm, setShowForm]       = useState(false);
   const [author, setAuthor]           = useState('');
   const [title, setTitle]             = useState('');
-  const [contentHtml, setContentHtml] = useState('');
+  const [textContent, setTextContent] = useState('');
+  const chartAttachRef                = useRef(null);
   const [selectedPost, setSelectedPost] = useState(null);
   const [page, setPage]               = useState(1);
   const [topPosts, setTopPosts]       = useState([]);
@@ -410,7 +135,8 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
 
   const resetForm = () => {
     setAuthor(''); setTitle('');
-    setContentHtml('');
+    setTextContent('');
+    chartAttachRef.current = null;
     setShowForm(false); setEditingPostId(null);
   };
 
@@ -421,7 +147,8 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
 
   useEffect(() => {
     if (!pendingPostContent) return;
-    setContentHtml(pendingPostContent);
+    chartAttachRef.current = pendingPostContent;
+    setTextContent('');
     setAuthor(user?.nickname || '');
     setShowForm(true);
     onPendingPostConsumed?.();
@@ -430,8 +157,13 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
   const handlePost = (e) => {
     e.preventDefault();
     if (!author.trim() || !title.trim()) return;
-    const stripped = contentHtml.replace(/<[^>]*>/g, '').trim();
-    if (!stripped && !contentHtml.includes('<img')) return;
+    if (!textContent.trim() && !chartAttachRef.current) return;
+
+    // 최종 HTML: 차트 이미지(있으면) + 텍스트
+    const textHtml = textContent.trim()
+      ? `<p style="white-space:pre-wrap">${textContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`
+      : '';
+    const finalHtml = (chartAttachRef.current || '') + textHtml;
 
     const isEdit = Boolean(editingPostId);
     const editingPost = isEdit ? posts.find(p => p.id === editingPostId) : null;
@@ -439,7 +171,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
       id:          isEdit ? editingPostId : Date.now(),
       author:      author.trim(),
       title:       title.trim(),
-      contentHtml,
+      contentHtml: finalHtml,
       time:        isEdit && editingPost ? editingPost.time : new Date().toISOString(),
       views:       isEdit && editingPost ? editingPost.views : 0,
       likes:       isEdit && editingPost ? editingPost.likes : 0,
@@ -469,7 +201,8 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
   };
 
   const handleEditPost = () => {
-    setContentHtml(selectedPost.contentHtml || '');
+    setTextContent(htmlToText(selectedPost.contentHtml || ''));
+    chartAttachRef.current = null;
     setAuthor(user?.nickname || selectedPost.author);
     setTitle(selectedPost.title);
     setEditingPostId(selectedPost.id);
@@ -568,13 +301,36 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
           />
         </div>
 
-        {/* 내용 — 섹션 라벨 스타일 */}
+        {/* 차트 미리보기 (pendingPostContent가 있을 때) */}
+        {chartAttachRef.current && (
+          <div style={{ padding: '10px 16px 0', fontSize: '0.72rem', fontWeight: 700, color: '#9E9590', letterSpacing: '0.05em' }}>
+            첨부 차트
+          </div>
+        )}
+        {chartAttachRef.current && (
+          <div
+            dangerouslySetInnerHTML={{ __html: chartAttachRef.current }}
+            style={{ padding: '6px 16px 0', maxWidth: '100%', overflow: 'hidden' }}
+          />
+        )}
+
+        {/* 내용 textarea */}
         <div style={{ padding: '10px 16px 4px', fontSize: '0.72rem', fontWeight: 700, color: '#9E9590', letterSpacing: '0.05em' }}>
           내용
         </div>
-        <div style={{ padding: '0 16px 16px', flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <RichEditor value={contentHtml} onChange={setContentHtml} />
-        </div>
+        <textarea
+          value={textContent}
+          onChange={e => setTextContent(e.target.value)}
+          placeholder="내용을 입력하세요"
+          style={{
+            flex: 1, resize: 'none',
+            border: 'none', outline: 'none',
+            padding: '4px 16px 16px',
+            fontSize: '0.95rem', lineHeight: 1.75,
+            background: 'transparent', color: '#1F1D1B',
+            fontFamily: 'inherit',
+          }}
+        />
       </form>
     </aside>
   );
