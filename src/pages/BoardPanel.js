@@ -2,12 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 
 /* ── 공통 버튼/입력 스타일 ── */
-const btnPrimary = {
-  background: '#6B625B', color: '#fff', fontWeight: 700,
-  border: 'none', borderRadius: 8, padding: '0 16px',
-  height: 36, fontSize: '0.88rem', cursor: 'pointer', flexShrink: 0,
-  display: 'flex', alignItems: 'center', gap: 6,
-};
+
 const btnSecondary = {
   background: 'none', color: '#6B625B', fontWeight: 600,
   border: '1.5px solid #E6DED4', borderRadius: 8, padding: '0 14px',
@@ -530,7 +525,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
         <span style={{ flex: 1, fontWeight: 800, fontSize: '1rem', color: '#1F1D1B' }}>
           {editingPostId ? '글 수정' : '새 글 작성'}
         </span>
-        <button type="submit" form="board-write-form" style={btnPrimary}>
+        <button type="submit" form="board-write-form" style={{ ...btnSecondary, gap: 4, height: 30, padding: '0 10px', fontSize: '0.78rem' }}>
           {editingPostId ? '수정 완료' : '등록'}
         </button>
       </div>
