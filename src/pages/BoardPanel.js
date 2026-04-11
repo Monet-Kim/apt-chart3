@@ -535,7 +535,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
         style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', display: 'flex', flexDirection: 'column' }}>
 
         {/* 제목 — 위로 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 46, borderBottom: '1px solid #E6DED4' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 46, flexShrink: 0, borderBottom: '1px solid #E6DED4' }}>
           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#C9A84C', width: 36, flexShrink: 0, textAlign: 'justify', textAlignLast: 'justify' }}>제&nbsp;&nbsp;목</span>
           <input
             placeholder="제목을 입력하세요"
@@ -550,7 +550,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostCon
         </div>
 
         {/* 작성자 — 아래, 더 작고 연하게 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 36, borderBottom: '1px solid #E6DED4', background: '#FDFAF5' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 36, flexShrink: 0, borderBottom: '1px solid #E6DED4', background: '#FDFAF5' }}>
           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#C9A84C', width: 36, flexShrink: 0, textAlign: 'justify', textAlignLast: 'justify' }}>작성자</span>
           <input
             placeholder="작성자"
