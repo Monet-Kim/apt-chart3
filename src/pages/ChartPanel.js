@@ -1,5 +1,6 @@
 // src/pages/ChartPanel.js
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import html2canvas from 'html2canvas';
 import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { createChart, LineSeries } from 'lightweight-charts';
@@ -538,8 +539,10 @@ function NormCompareChart({ series, normMonthsAgo, isMobile }) {
 // ────────────────────────────────────────────
 // 메인 컴포넌트
 // ────────────────────────────────────────────
-export default function ChartPanel({ isOpen = false, favApts = [], removeFavoriteApt, isMobile = false, isTablet = false }) {
+export default function ChartPanel({ isOpen = false, favApts = [], removeFavoriteApt, isMobile = false, isTablet = false, onWritePost, user }) {
   const [activeKey, setActiveKey]   = useState(null);
+  const g1Ref = useRef(null); // 실거래 평균가 차트
+  const g2Ref = useRef(null); // 정규화 비교 차트
   const [normMonthsAgo, setNormMonthsAgo] = useState(12); // 기본: 12개월(1년) 전 = 100%
   const [pressedNorm, setPressedNorm]     = useState(null); // 'back' | 'forward' | null
 
@@ -670,6 +673,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
   const [selectedKeys, setSelectedKeys]       = useState([]);
   const [compareLoading, setCompareLoading]   = useState(false);
   const [compareData, setCompareData]         = useState(null);
+  const [compareBtnActive, setCompareBtnActive] = useState(false);
 
   const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: onAreaMouseUp } = useAreaDragScroll();
 
@@ -856,16 +860,27 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               if (keys.length <= 3 && keys.length >= 2) {
                 setSelectedKeys(keys);
                 loadCompareData(keys);
+              } else if (keys.length === 1) {
+                setSelectedKeys(keys);
+                loadCompareData(keys);
               } else {
-                setSelectedKeys(keys.length === 1 ? keys : []);
+                setSelectedKeys([]);
                 setShowSelectModal(true);
               }
             }}
+            onMouseDown={() => setCompareBtnActive(true)}
+            onMouseUp={() => setCompareBtnActive(false)}
+            onMouseLeave={() => setCompareBtnActive(false)}
+            onTouchStart={() => setCompareBtnActive(true)}
+            onTouchEnd={() => setCompareBtnActive(false)}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
-              background: 'none', border: '1.5px solid #E6DED4', borderRadius: 8,
+              background: compareBtnActive ? '#E6DED4' : 'none',
+              border: '1.5px solid #E6DED4', borderRadius: 8,
               padding: '0 10px', height: 30, cursor: 'pointer',
-              fontSize: '0.78rem', fontWeight: 600, color: '#6B625B',
+              fontSize: '0.78rem', fontWeight: 600,
+              color: compareBtnActive ? '#3D3329' : '#6B625B',
+              transition: 'background 0.1s, color 0.1s',
             }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={13} height={13}>
@@ -875,16 +890,34 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             상세비교
           </button>
           <button
-            onClick={() => {/* 차후 구현 */}}
+            onClick={async () => {
+              if (!user) { alert('로그인 후 이용할 수 있습니다.'); return; }
+              if (!g2Ref.current && !g1Ref.current) { alert('차트에 데이터가 없습니다.'); return; }
+              try {
+                const opts = { useCORS: true, scale: 2, backgroundColor: '#ffffff', logging: false };
+                const [c2, c1] = await Promise.all([
+                  g2Ref.current ? html2canvas(g2Ref.current, opts) : null,
+                  g1Ref.current ? html2canvas(g1Ref.current, opts) : null,
+                ]);
+                const imgHtml = [c2, c1].filter(Boolean).map(c =>
+                  `<img src="${c.toDataURL('image/png')}" style="max-width:100%;border-radius:8px;display:block;margin:6px 0;" />`
+                ).join('');
+                if (!imgHtml) { alert('차트에 데이터가 없습니다.'); return; }
+                onWritePost?.(imgHtml);
+              } catch (e) {
+                alert('차트 캡처 중 오류가 발생했습니다.');
+              }
+            }}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               background: 'none', border: '1.5px solid #E6DED4', borderRadius: 8,
               padding: '0 10px', height: 30, cursor: 'pointer',
-              fontSize: '0.78rem', fontWeight: 600, color: '#6B625B',
+              fontSize: '0.78rem', fontWeight: 600,
+              color: user ? '#6B625B' : '#C9BFB4',
             }}
-            title="게시판 글로 보내기"
+            title={user ? '게시판 글로 보내기' : '로그인 후 이용 가능'}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="#6B625B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={14} height={14}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" width={14} height={14}>
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
             </svg>
             작성하기
@@ -892,111 +925,125 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         </div>
       </div>
 
-      {/* ── 콘텐츠 영역 ── */}
+{/* ── 콘텐츠 영역 ── */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14, padding, boxSizing: 'border-box' }}>
 
-      {/* ── 즐겨찾기 단지 목록 ── */}
+      {/* ── 즐겨찾기 단지 목록 + 면적 선택 ── */}
       {favApts.length > 0 ? (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', padding: '0 2px' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
           <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
-            {favApts.map(fav => {
-              const isActive = fav.key === activeKey;
-              return (
-                <div key={fav.key} onClick={async () => { setActiveKey(fav.key); await loadAreas(fav); }}
-                  style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 4px', cursor: 'pointer' }}>
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: isActive ? '#6B625B' : '#C9BFB4', flexShrink: 0 }} />
-                  <span style={{ fontSize: '0.78rem', fontWeight: isActive ? 700 : 400, color: isActive ? '#1F1D1B' : '#888780', whiteSpace: 'nowrap' }}>
-                    {trimAptName(fav.kaptName)}
-                  </span>
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeFavoriteApt?.(fav.key);
-                      if (activeKey === fav.key) setActiveKey(null);
-                      setSeries(prev => prev.filter(s => s.key !== fav.key));
-                    }}
-                    style={{ fontSize: '0.6rem', color: '#C9BFB4', cursor: 'pointer', lineHeight: 1 }}
-                    title="즐겨찾기 삭제"
-                  >✕</span>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* 즐겨찾기 버튼 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              {favApts.map(fav => {
+                const isActive = fav.key === activeKey;
+                return (
+                  <div key={fav.key} onClick={async () => { setActiveKey(fav.key); await loadAreas(fav); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      padding: '4px 8px',
+                      background: isActive ? '#F5F1EC' : '#FDFBF8',
+                      border: '1px solid #E6DED4',
+                      borderBottom: isActive ? '2px solid #C9A84C' : '1px solid #E6DED4',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                    }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? '#1F1D1B' : '#9E9589', whiteSpace: 'nowrap' }}>
+                      {trimAptName(fav.kaptName)}
+                    </span>
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeFavoriteApt?.(fav.key);
+                        if (activeKey === fav.key) setActiveKey(null);
+                        setSeries(prev => prev.filter(s => s.key !== fav.key));
+                      }}
+                      style={{ fontSize: '0.6rem', color: '#C9BFB4', cursor: 'pointer', lineHeight: 1 }}
+                      title="즐겨찾기 삭제"
+                    >✕</span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* 면적 선택 */}
+            {activeFav ? (
+              <div style={{ flexShrink: 0 }}>
+                <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: '#C9BFB4' }} />
+                  전용면적 선택
+                  {(() => {
+                    const areas = areasByKey[activeKey] || [];
+                    if (!areas.length) return null;
+                    const mn = Math.min(...areas).toFixed(1);
+                    const mx = Math.max(...areas).toFixed(1);
+                    return <span>{mn === mx ? `(${mn}㎡)` : `(${mn}~${mx}㎡)`}</span>;
+                  })()}
+                  <span style={{ color: '#C9BFB4' }}>· 중복선택가능</span>
                 </div>
-              );
-            })}
+                <div
+                  ref={areaScrollRef}
+                  className="chart-area-tab-scroll"
+                  onMouseDown={onAreaMouseDown}
+                  onMouseMove={onAreaMouseMove}
+                  onMouseUp={onAreaMouseUp}
+                  onMouseLeave={onAreaMouseUp}
+                  style={{
+                    display: 'flex', gap: 0,
+                    overflowX: 'auto', overflowY: 'visible',
+                    borderBottom: '1px solid #E6DED4',
+                    cursor: dragRef.current?.down ? 'grabbing' : 'grab',
+                    userSelect: 'none', touchAction: 'pan-x',
+                    paddingBottom: 4,
+                    marginLeft: isMobile ? -26.5 : isTablet ? -30.5 : -34.5,
+                    paddingLeft: isMobile ? 26.5 : isTablet ? 30.5 : 34.5,
+                  }}
+                >
+                  {loadingKey === activeKey ? (
+                    <span style={{ padding: '6px 10px', color: '#6B625B', fontSize: '0.82rem' }}>로딩…</span>
+                  ) : !(areasByKey[activeKey] || []).length ? (
+                    <span style={{ padding: '6px 10px', color: '#c33', fontSize: '0.82rem' }}>면적 목록이 없습니다.</span>
+                  ) : (
+                    (areasByKey[activeKey] || []).map((ar) => {
+                      const hotList  = hotAreasByKey[activeKey] || [];
+                      const hotRank  = hotList.indexOf(ar);
+                      const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
+                      const inSeries = series.some(s => s.key === activeKey && s.area === ar);
+                      return (
+                        <div key={ar} onClick={() => addSeries(activeFav, ar)}
+                          style={{
+                            flex: '0 0 auto', padding: '6px 10px',
+                            fontSize: '0.78rem',
+                            fontWeight: inSeries ? 700 : 400,
+                            color: inSeries ? '#1F1D1B' : '#888780',
+                            borderBottom: inSeries ? '2px solid #1F1D1B' : '2px solid transparent',
+                            marginBottom: -1, cursor: 'pointer',
+                            position: 'relative', whiteSpace: 'nowrap', transition: 'color 0.1s',
+                          }}
+                          title="클릭하면 그래프에 누적 추가"
+                        >
+                          {ar.toFixed(1)}㎡
+                          {hotLabel && (
+                            <span style={{
+                              position: 'absolute', top: 0, right: 2,
+                              color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
+                              pointerEvents: 'none', transform: 'rotate(-12deg)',
+                              transformOrigin: 'center center', lineHeight: 1,
+                            }}>{hotLabel}</span>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                {errMsg && <div style={{ marginTop: 4, color: '#c33', fontSize: '0.82rem' }}>{errMsg}</div>}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: '#C9BFB4' }}>위에서 단지를 클릭하면 면적을 선택할 수 있습니다.</div>
+            )}
           </div>
         </div>
       ) : (
         <div style={{ color: '#C9BFB4', fontSize: '0.9rem', padding: '4px 0' }}>추가된 아파트가 없습니다.</div>
-      )}
-
-      {/* ── 면적 선택 탭 ── */}
-      {activeFav && (
-        <div style={{
-          flexShrink: 0,
-          marginLeft: isMobile ? -16 : isTablet ? -20 : -24,
-          paddingLeft: isMobile ? 16 : isTablet ? 20 : 24,
-        }}>
-          <div style={{ fontSize: '0.72rem', color: '#888780', marginBottom: 4 }}>
-            전용면적 선택 <span style={{ color: '#6B625B', fontWeight: 600 }}>{trimAptName(activeFav.kaptName)}</span>
-          </div>
-          <div
-            ref={areaScrollRef}
-            className="chart-area-tab-scroll"
-            onMouseDown={onAreaMouseDown}
-            onMouseMove={onAreaMouseMove}
-            onMouseUp={onAreaMouseUp}
-            onMouseLeave={onAreaMouseUp}
-            style={{
-              display: 'flex', gap: 0,
-              overflowX: 'auto', overflowY: 'visible',
-              borderBottom: '1px solid #E6DED4',
-              cursor: dragRef.current?.down ? 'grabbing' : 'grab',
-              userSelect: 'none', touchAction: 'pan-x',
-              paddingBottom: 4,
-            }}
-          >
-            {loadingKey === activeKey ? (
-              <span style={{ padding: '6px 10px', color: '#6B625B', fontSize: '0.82rem' }}>로딩…</span>
-            ) : !(areasByKey[activeKey] || []).length ? (
-              <span style={{ padding: '6px 10px', color: '#c33', fontSize: '0.82rem' }}>면적 목록이 없습니다.</span>
-            ) : (
-              (areasByKey[activeKey] || []).map((ar) => {
-                const hotList  = hotAreasByKey[activeKey] || [];
-                const hotRank  = hotList.indexOf(ar);
-                const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
-                const inSeries = series.some(s => s.key === activeKey && s.area === ar);
-                return (
-                  <div key={ar} onClick={() => addSeries(activeFav, ar)}
-                    style={{
-                      flex: '0 0 auto', padding: '6px 10px',
-                      fontSize: '0.78rem',
-                      fontWeight: inSeries ? 700 : 400,
-                      color: inSeries ? '#1F1D1B' : '#888780',
-                      borderBottom: inSeries ? '2px solid #1F1D1B' : '2px solid transparent',
-                      marginBottom: -1, cursor: 'pointer',
-                      position: 'relative', whiteSpace: 'nowrap', transition: 'color 0.1s',
-                    }}
-                    title="클릭하면 그래프에 누적 추가"
-                  >
-                    {ar.toFixed(1)}㎡
-                    {hotLabel && (
-                      <span style={{
-                        position: 'absolute', top: 0, right: 2,
-                        color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
-                        pointerEvents: 'none', transform: 'rotate(-12deg)',
-                        transformOrigin: 'center center', lineHeight: 1,
-                      }}>{hotLabel}</span>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-          {errMsg && <div style={{ marginTop: 4, color: '#c33', fontSize: '0.82rem' }}>{errMsg}</div>}
-        </div>
-      )}
-
-      {!activeFav && favApts.length > 0 && (
-        <div style={{ fontSize: '0.78rem', color: '#C9BFB4' }}>위에서 단지를 클릭하면 면적을 선택할 수 있습니다.</div>
       )}
 
       {/* ── 활성 시리즈 범례 ── */}
@@ -1006,7 +1053,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', alignItems: 'center', flex: 1 }}>
             {series.map((s, idx) => (
               <div key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 600, color: '#1F1D1B' }}>
-                <span style={{ width: 12, height: 2, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2, flexShrink: 0 }} />
+                <span style={{ width: 8, height: 8, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: '50%', flexShrink: 0 }} />
                 <span>{trimAptName(s.kaptName)} {s.area}㎡</span>
                 <button onClick={() => setSeries(prev => prev.filter(x => x.id !== s.id))}
                   style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#C9BFB4', lineHeight: 1, padding: 0, fontSize: '0.6rem' }}
@@ -1018,7 +1065,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       )}
 
       {/* ── G2: 정규화 비교 ── */}
-      <div style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
+      <div ref={g2Ref} style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#1F1D1B' }}>
             정규화 비교 : 시점 <span style={{ color: '#6B625B' }}>{baseLabel}</span>
@@ -1081,7 +1128,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       </div>
 
       {/* ── G1: 실거래 평균가 ── */}
-      <div style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
+      <div ref={g1Ref} style={{ borderTop: '1px solid #E6DED4', paddingTop: 8 }}>
         <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#1F1D1B', marginBottom: 4 }}>
           실거래 평균가 <span style={{ color: '#6B625B', fontWeight: 600 }}>단위: 억원</span>
         </div>

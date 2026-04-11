@@ -722,11 +722,11 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       ['동 수',        pickList('kaptDongCnt') ? `${pickList('kaptDongCnt')}동` : null],
       ['최고층',       pickList('kaptTopFloor') ? `${pickList('kaptTopFloor')}층` : null],
       ['지하층',       pickList('kaptBaseFloor') ? `${pickList('kaptBaseFloor')}층` : null],
-      ['관리직원수',   pickDetail('kaptMgrCnt') ? `${pickDetail('kaptMgrCnt')}명` : null],
+      ['관리직원수',   (() => { const cnt = parseFloat(pickDetail('kaptMgrCnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
       ['관리회사',     pickDetail('kaptCcompany')],
-      ['경비원수',     pickDetail('kaptdScnt') ? `${pickDetail('kaptdScnt')}명` : null],
+      ['경비원수',     (() => { const cnt = parseFloat(pickDetail('kaptdScnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
       ['경비용역사',   pickDetail('kaptdSecCom')],
-      ['청소부수',     pickDetail('kaptdClcnt') ? `${pickDetail('kaptdClcnt')}명` : null],
+      ['청소부수',     (() => { const cnt = parseFloat(pickDetail('kaptdClcnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
       ['전기용량(kW)', 전기용량],
       ['화재경보기',   pickDetail('codeFalarm')],
       ['복지시설',     pickDetail('welfareFacility')],
@@ -903,13 +903,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
             <span onClick={() => setShowInfo(false)} style={{ cursor: 'pointer', fontSize: '0.75rem', color: '#C9BFB4', fontWeight: 700, lineHeight: 1 }}>✕</span>
           </div>
           {infoPairs.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {infoPairs.map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                  <span style={{ fontSize: '0.7rem', color: '#B4AFA8', fontWeight: 600, flexShrink: 0, minWidth: 72 }}>{k}</span>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1F1D1B', wordBreak: 'break-word', lineHeight: 1.4 }}>{v}</span>
-                </div>
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid #EDE8E0', marginTop: 6 }}>
+              {infoPairs.map(([k, v], i) => {
+                const rowBg = i % 2 === 0 ? '#FDFBF8' : '#F5F1EC';
+                return (
+                  <div key={k} style={{ display: 'flex', alignItems: 'center', background: rowBg, borderBottom: '1px solid #EDE8E0' }}>
+                    <span style={{ fontSize: '0.65rem', color: '#888780', fontWeight: 600, flexShrink: 0, width: 80, padding: '7px 8px', lineHeight: 1.35 }}>{k}</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 500, color: '#1F1D1B', wordBreak: 'break-word', lineHeight: 1.4, padding: '7px 8px', borderLeft: '1px solid #EDE8E0', flex: 1 }}>{v}</span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div style={{ fontSize: '0.75rem', color: '#C9BFB4', textAlign: 'center', padding: '12px 0' }}>정보 없음</div>
@@ -1077,18 +1080,17 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                       key={fav.key}
                       onClick={() => onSelectApt?.(fav)}
                       style={{
-                        display: 'flex', alignItems: 'center', gap: 4,
-                        padding: '3px 6px', cursor: 'pointer', borderRadius: 6,
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        padding: '4px 8px', cursor: 'pointer', borderRadius: 6,
+                        background: isActive ? '#F5F1EC' : '#FDFBF8',
+                        border: '1px solid #E6DED4',
+                        borderBottom: isActive ? '2px solid #C9A84C' : '1px solid #E6DED4',
                         animation: isNew ? 'favHighlightBg 2s ease-out forwards' : 'none',
                       }}
                     >
-                      <div style={{
-                        width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                        background: isActive ? '#6B625B' : '#C9BFB4',
-                      }} />
                       <span style={{
-                        fontSize: '0.72rem', fontWeight: isActive ? 700 : 400,
-                        color: isActive ? '#1F1D1B' : '#888780',
+                        fontSize: '0.7rem', fontWeight: 800,
+                        color: isActive ? '#1F1D1B' : '#9E9589',
                         whiteSpace: 'nowrap',
                         animation: isNew ? 'favHighlightText 2s ease-out forwards' : 'none',
                       }}>

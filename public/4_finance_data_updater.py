@@ -75,11 +75,24 @@ def update_year_csvs(ticker: str, df_new: pd.DataFrame):
     base_prefix = BASE_DIR / f"finance_{ticker}"
     years = sorted(df_new["year"].unique())
     written_years = []
+    current_year = datetime.now().year
 
     for year in years:
         if year <= 0:
             continue
         out_csv = f"{base_prefix}_{year}.csv"
+
+        # 완료 연도 스킵: 2년 이상 과거이고 기존 CSV에 52행 이상이면 건드리지 않음
+        if year <= current_year - 2 and os.path.exists(out_csv):
+            try:
+                existing = pd.read_csv(out_csv, dtype=str)
+                if len(existing) >= 52:
+                    print(f"  스킵 (완료): {out_csv} ({len(existing)}행)")
+                    written_years.append(int(year))
+                    continue
+            except Exception:
+                pass
+
         new_y = df_new[df_new["year"] == year].copy()
         target_dates = set(new_y["date"].astype(str))
 

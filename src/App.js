@@ -49,6 +49,7 @@ function App() {
 
   // 통합 패널 상태: 'info' | 'login' | 'chart' | 'board' | null
   const [openPanel, setOpenPanel] = useState(null);
+  const [pendingPostContent, setPendingPostContent] = useState(null);
 
   const togglePanel = (key) => setOpenPanel(prev => prev === key ? null : key);
   const closePanel  = () => setOpenPanel(null);
@@ -182,10 +183,10 @@ function App() {
               />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} />
+              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} onWritePost={(html) => { setPendingPostContent(html); setOpenPanel('board'); }} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} />
+              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} onPendingPostConsumed={() => setPendingPostContent(null)} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
               <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} />
@@ -299,10 +300,10 @@ function App() {
               <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} />
+              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} onPendingPostConsumed={() => setPendingPostContent(null)} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} />
+              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} onWritePost={(html) => { setPendingPostContent(html); setOpenPanel('board'); }} />
             </div>
           </div>
         )}

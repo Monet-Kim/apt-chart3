@@ -79,6 +79,7 @@ function RichEditor({ value, onChange }) {
   const editorRef  = useRef();
   const fileInputRef = useRef();
   const [activeFormats, setActiveFormats] = useState({});
+  const [fontSize, setFontSize] = useState(14);
   const imgCountRef = useRef(0);
 
   // 이미지 개수 계산
@@ -111,6 +112,31 @@ function RichEditor({ value, onChange }) {
 
   const handleKeyUp = () => updateActiveFormats();
   const handleMouseUp = () => updateActiveFormats();
+
+  const changeFontSize = (delta) => {
+    editorRef.current?.focus();
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) {
+      // 선택된 텍스트 → execCommand 트릭으로 font 태그 삽입 후 span으로 교체
+      document.execCommand('fontSize', false, '7');
+      editorRef.current?.querySelectorAll('font[size="7"]').forEach(el => {
+        const current = parseFloat(window.getComputedStyle(el).fontSize) || fontSize;
+        const next = Math.max(8, Math.min(40, current + delta));
+        const span = document.createElement('span');
+        span.style.fontSize = `${next}px`;
+        while (el.firstChild) span.appendChild(el.firstChild);
+        el.replaceWith(span);
+      });
+      onChange(editorRef.current.innerHTML);
+    } else {
+      // 선택 없음 → 에디터 기본 크기 변경
+      setFontSize(prev => {
+        const next = Math.max(8, Math.min(40, prev + delta));
+        if (editorRef.current) editorRef.current.style.fontSize = `${next}px`;
+        return next;
+      });
+    }
+  };
 
   const insertImage = (src) => {
     editorRef.current?.focus();
@@ -216,6 +242,16 @@ function RichEditor({ value, onChange }) {
 
         <Divider />
 
+        {/* 글자 크기 */}
+        <ToolbarBtn title="글자 크게" onMouseDown={e => { e.preventDefault(); changeFontSize(2); }}>
+          <span style={{ fontWeight: 800, fontSize: '0.82rem', letterSpacing: '-0.5px' }}>A+</span>
+        </ToolbarBtn>
+        <ToolbarBtn title="글자 작게" onMouseDown={e => { e.preventDefault(); changeFontSize(-2); }}>
+          <span style={{ fontWeight: 800, fontSize: '0.68rem', letterSpacing: '-0.5px' }}>A-</span>
+        </ToolbarBtn>
+
+        <Divider />
+
         {/* 정렬 */}
         <ToolbarBtn title="왼쪽 정렬" onMouseDown={e => { e.preventDefault(); exec('justifyLeft'); }}>
           <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -270,10 +306,10 @@ function RichEditor({ value, onChange }) {
         data-placeholder="내용을 입력하세요 (이미지 붙여넣기 가능)"
         style={{
           minHeight: 180, padding: '14px 16px',
-          outline: 'none', lineHeight: 1.8,
-          fontSize: '0.95rem', color: '#1F1D1B',
+          outline: 'none', lineHeight: 1.7,
+          fontSize: `${fontSize}px`, color: '#1F1D1B',
           fontFamily: 'inherit', flex: 1,
-          overflowY: 'auto',
+          overflowY: 'auto', textAlign: 'left',
         }}
       />
 
@@ -338,7 +374,7 @@ function renderContent(post) {
 /* ════════════════════════════════════════════════
    BoardPanel
 ════════════════════════════════════════════════ */
-function BoardPanel({ backHandlerRef, user }) {
+function BoardPanel({ backHandlerRef, user, pendingPostContent, onPendingPostConsumed }) {
   const [posts, setPosts]             = useState([]);
   const [editingPostId, setEditingPostId] = useState(null);
   const [showForm, setShowForm]       = useState(false);
@@ -387,6 +423,14 @@ function BoardPanel({ backHandlerRef, user }) {
     setAuthor(user?.nickname || '');
     setShowForm(true);
   };
+
+  useEffect(() => {
+    if (!pendingPostContent) return;
+    setContentHtml(pendingPostContent);
+    setAuthor(user?.nickname || '');
+    setShowForm(true);
+    onPendingPostConsumed?.();
+  }, [pendingPostContent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePost = (e) => {
     e.preventDefault();
