@@ -1,3 +1,58 @@
+:root {
+  /* 메인 브랜드 — rose_slate 기본값 (applyTheme()이 덮어씀) */
+  --color-primary:           #5C3840;
+  --color-primary-border:    #4A2830;
+  --color-primary-text:      #F0E0E0;
+
+  --color-accent:            #8C5860;
+  --color-accent-muted:      #C8A0A8;
+  --color-accent-text:       #2A1418;
+
+  /* 보완색 */
+  --color-complement:        #3A4860;
+  --color-complement-muted:  #9AAAC0;
+
+  /* 배경 레이어 */
+  --color-bg:                #F8F4F3;
+  --color-surface:           #ffffff;
+  --color-surface-raised:    #FDF9F8;
+  --color-surface-2:         #FCF8F7;
+  --color-surface-3:         #F0E8E8;
+  --color-surface-active:    #EAE0E2;
+  --color-surface-chart:     #E4EAF0;
+  --color-hover:             #EDE4E4;
+
+  /* 텍스트 */
+  --color-text-main:         #241E1C;
+  --color-text-sub:          #5A4A4C;
+  --color-text-muted:        #8A7878;
+  --color-text-faint:        #A09090;
+  --color-text-disabled:     #C8B8B8;
+
+  /* 테두리 */
+  --color-border:            #E0D4D4;
+  --color-border-strong:     #C8B8B8;
+
+  /* 스크롤바 */
+  --color-scrollbar:         #C8B8BC;
+  --color-scrollbar-hover:   #A89098;
+
+  /* Mainmap UI — color-* 참조 */
+  --map-accent:              var(--color-accent);
+  --map-accent-border:       var(--color-primary-border);
+  --map-accent-bg:           var(--color-surface-3);
+  --map-accent-muted:        var(--color-accent-muted);
+  --map-border:              var(--color-surface-2);
+  --map-text:                var(--color-text-main);
+  --map-surface:             var(--color-bg);
+  --map-text-muted:          var(--color-text-disabled);
+
+  /* 지도 마커 */
+  --marker-normal:           #6880A0;
+  --marker-active:           #8C5860;
+  --marker-cluster:          #3A4860;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

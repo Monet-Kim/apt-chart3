@@ -1,30 +1,455 @@
 // src/pages/LeftPanel.js
-import React, { useEffect, useMemo, useState } from 'react';
-import Plot from 'react-plotly.js';
-import { ymToDate, dateToISOYM } from '../utils/dateUtils';
-import { useAreaDragScroll } from '../hooks/useAreaDragScroll';
+import FinanceChart from './FinanceChart';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { createChart, LineSeries, HistogramSeries } from 'lightweight-charts';
+import { ymToDate, dateToISOYM } from '../styles/dateUtils';
+import { getChartHeight, CHART_WIDTH_RATIO, OVERLAY_LEFT_W, OVERLAY_RIGHT_W } from '../styles/chartHeight';
+import { trimAptName } from '../styles/aptNameUtils';
 import {
-  buildPNU, fetchWorkbook, fetchPdata, listAreasForPnu,
-  aggregateTradesForArea, pickInitialArea, groupAreasToRep,
+  buildPNU, fetchWorkbook, fetchPdata, fetchKaptDetail, listAreasForPnu,
+  aggregateTradesForArea, pickInitialArea, groupAreasToRep, normAptNm,
+  clearTradeCacheForPnu, parseDoroKey,
 } from './services/aptData';
+import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
+import { ACCENT_ALPHA, cssVar, SERIES_COLORS } from '../styles/themes';
 
-function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavoriteApt }) {
+// L1 색상 — SERIES_COLORS 기반으로 통일
+const L1_COLORS = {
+  volume:   SERIES_COLORS[0] + 'AA',
+  avgLine:  SERIES_COLORS[0],
+  dot:      SERIES_COLORS[0] + 'AA',
+  triangle: SERIES_COLORS[0] + 'AA',
+};
+
+/* 면적 탭 스크롤바 스타일 (webkit) */
+const areaScrollbarStyle = `
+.area-tab-scroll::-webkit-scrollbar { height: 3px; }
+.area-tab-scroll::-webkit-scrollbar-track { background: transparent; }
+.area-tab-scroll::-webkit-scrollbar-thumb { background: var(--color-scrollbar); border-radius: 2px; }
+.area-tab-scroll::-webkit-scrollbar-thumb:hover { background: var(--color-scrollbar-hover); }
+`;
+if (typeof document !== 'undefined') {
+  let s = document.getElementById('area-scroll-style');
+  if (!s) { s = document.createElement('style'); s.id = 'area-scroll-style'; document.head.appendChild(s); }
+  s.textContent = areaScrollbarStyle;
+}
+
+/* Hot 레이블 흔들림 애니메이션 */
+const hotKeyframes = `
+@keyframes hotWiggle {
+  0%   { transform:  scale(1);   }
+  25%  { transform:  scale(1); }
+  50%  { transform:  scale(1);   }
+  75%  { transform:  scale(1); }
+  100% { transform:  scale(1);   }
+}
+@keyframes favHighlightBg {
+  0%   { background: rgba(140,88,96,0.40); }
+  40%  { background: rgba(140,88,96,0.35); }
+  100% { background: transparent; }
+}
+@keyframes favHighlightText {
+  0%   { color: #8a6200; }
+  40%  { color: #8a6200; }
+  100% { color: var(--color-text-muted); }
+}
+`;
+if (typeof document !== 'undefined') {
+  let s = document.getElementById('hot-wiggle-style');
+  if (!s) { s = document.createElement('style'); s.id = 'hot-wiggle-style'; document.head.appendChild(s); }
+  s.textContent = hotKeyframes;
+}
+
+// ────────────────────────────────────────────
+// 공통 차트 옵션 (FinanceChart와 동일한 스타일)
+// ────────────────────────────────────────────
+function makeChartOptions(height, width = 800) {
+  return {
+    height,
+    watermark: { visible: false },
+    layout: {
+      background: { color: cssVar('--color-surface') },
+      textColor: cssVar('--color-text-sub'),
+      fontSize: width < 400 ? 9 : width < 600 ? 10 : 11,
+      fontFamily: 'Pretendard, -apple-system, sans-serif',
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: 'rgba(0,0,0,0.12)' },
+      horzLines: { color: 'rgba(0,0,0,0.08)' },
+    },
+    crosshair: {
+      mode: 1,
+      vertLine: { color: cssVar('--color-text-sub'), width: 1, style: 0, labelBackgroundColor: cssVar('--color-text-sub') },
+      horzLine: { color: cssVar('--color-text-sub'), width: 1, style: 0, labelBackgroundColor: cssVar('--color-text-sub') },
+    },
+    timeScale: {
+      borderColor: cssVar('--color-border'),
+      timeVisible: true,
+      secondsVisible: false,
+      minBarSpacing: 1,
+      tickMarkFormatter: (time, tickMarkType) => {
+        const d = typeof time === 'object'
+          ? new Date(time.year, time.month - 1, time.day)
+          : new Date(time);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        if (tickMarkType >= 2) return `${yyyy}/${mm}/${dd}`;
+        return `${yyyy}/${mm}`;
+      },
+    },
+    localization: {
+      timeFormatter: (time) => {
+        const d = typeof time === 'object'
+          ? new Date(time.year, time.month - 1, time.day)
+          : new Date(time);
+        return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+      },
+    },
+    rightPriceScale: { borderColor: cssVar('--color-border') },
+    handleScroll: { mouseWheel: true, pressedMouseMove: true },
+    handleScale: { mouseWheel: true, pinch: true },
+  };
+}
+
+// ────────────────────────────────────────────
+// L1: 아파트 실거래 평균가 + 거래량 + dot 차트
+// ────────────────────────────────────────────
+function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile, aptName, selArea }) {
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const volSeriesRef = useRef(null);
+  const avgSeriesRef = useRef(null);
+  const svgRef       = useRef(null);
+
+  const [chartHeight, setChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
+
+  // x: ["2020-01", ...] → "YYYY-MM-01" 형태로 변환
+  function toTime(ym) {
+    return ym.length === 7 ? `${ym}-01` : ym;
+  }
+
+  // "YYYY-MM" → 밀리초 (Y축 범위 계산용)
+  const ymToMs = (ym) => new Date(ym + '-01').getTime();
+
+  // 현재 visible range 기준으로 dots + avg Y범위 동적 계산
+  const dataRef = useRef({ x: [], avg: [], ptsX: [], ptsY: [], pPtsX: [], pPtsY: [] });
+  dataRef.current = { x, avg, ptsX, ptsY, pPtsX, pPtsY };
+
+  // autoscaleInfoProvider: 호출 시마다 현재 visible range에서 Y범위 계산
+  const yProviderRef = useRef(null);
+  if (!yProviderRef.current) {
+    yProviderRef.current = () => {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      const vr = chart.timeScale().getVisibleRange();
+      if (!vr) return null;
+      const fromMs = new Date(vr.from).getTime();
+      const toMs   = new Date(vr.to  ).getTime();
+      const { x: dx, avg: da, ptsX: dpx, ptsY: dpy, pPtsX: dppx, pPtsY: dppy } = dataRef.current;
+      const ys = [];
+      for (let i = 0; i < dx.length; i++) {
+        const ms = ymToMs(dx[i]);
+        if (ms >= fromMs && ms <= toMs && Number.isFinite(da[i])) ys.push(da[i]);
+      }
+      for (let i = 0; i < dpx.length; i++) {
+        if (ymToMs(dpx[i]) >= fromMs && ymToMs(dpx[i]) <= toMs) ys.push(dpy[i]);
+      }
+      for (let i = 0; i < dppx.length; i++) {
+        if (ymToMs(dppx[i]) >= fromMs && ymToMs(dppx[i]) <= toMs) ys.push(dppy[i]);
+      }
+      if (!ys.length) return null;
+      const lo = Math.min(...ys);
+      const hi = Math.max(...ys);
+      const pad = (hi - lo) * 0.10 || hi * 0.10;
+      return { priceRange: { minValue: lo - pad, maxValue: hi + pad }, margins: { above: 0, below: 0 } };
+    };
+  }
+
+  // 항상 최신 props를 참조하도록 ref로 관리
+  const redrawDotsRef = useRef(null);
+  redrawDotsRef.current = () => {
+    const svg = svgRef.current;
+    const chart = chartRef.current;
+    if (!svg || !chart) return;
+
+    // 데이터 없으면 SVG만 비우고 조기 종료
+    if (!ptsX?.length && !pPtsX?.length) {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      return;
+    }
+
+    const visibleRange = chart.timeScale().getVisibleRange();
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    svg.setAttribute('width', rect.width);
+    svg.setAttribute('height', chartHeight);
+
+    const drawDots = (xs, ys, shape) => {
+      xs.forEach((xVal, i) => {
+        const timeStr = toTime(xVal);
+        if (visibleRange && (timeStr < visibleRange.from || timeStr > visibleRange.to)) return;
+
+        const xCoord = chart.timeScale().timeToCoordinate(timeStr);
+        const yCoord = avgSeriesRef.current
+          ? avgSeriesRef.current.priceToCoordinate(ys[i])
+          : null;
+        if (xCoord == null || yCoord == null) return;
+
+        if (shape === 'circle') {
+          const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          circle.setAttribute('cx', xCoord);
+          circle.setAttribute('cy', yCoord);
+          circle.setAttribute('r', 3);
+          circle.setAttribute('fill', L1_COLORS.dot);
+          circle.setAttribute('stroke', 'none');
+          circle.setAttribute('stroke-width', '0');
+          svg.appendChild(circle);
+        } else if (shape === 'triangle') {
+          const size = 4;
+          const cx = xCoord, cy = yCoord;
+          const points = `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`;
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          poly.setAttribute('points', points);
+          poly.setAttribute('fill', L1_COLORS.triangle);
+          poly.setAttribute('stroke', 'none');
+          poly.setAttribute('stroke-width', '0');
+          svg.appendChild(poly);
+        }
+      });
+    };
+
+    drawDots(ptsX, ptsY, 'circle');
+    if (pPtsX?.length) drawDots(pPtsX, pPtsY, 'triangle');
+  };
+
+  // chartHeight 변경 시 차트에 반영
+  useEffect(() => {
+    chartRef.current?.applyOptions({ height: chartHeight });
+  }, [chartHeight]);
+
+  // 차트 초기화
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const initW = containerRef.current.clientWidth;
+    const chart = createChart(containerRef.current, {
+      ...makeChartOptions(chartHeight, initW),
+      leftPriceScale: { visible: false },
+      rightPriceScale: {
+        visible: true,
+        borderColor: cssVar('--color-border'),
+        scaleMargins: { top: 0, bottom: 0 },
+      },
+    });
+    chartRef.current = chart;
+
+    // 거래량 히스토그램 (왼쪽 overlay, 별도 price scale)
+    const volSeries = chart.addSeries(HistogramSeries, {
+      color: L1_COLORS.volume,
+      priceScaleId: 'vol',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.75, bottom: 0 }, // 하단 25%만 사용
+    });
+    volSeriesRef.current = volSeries;
+
+    // 평균가 라인
+    const avgSeries = chart.addSeries(LineSeries, {
+      color: L1_COLORS.avgLine,
+      lineWidth: 2,
+      priceScaleId: 'right',
+      lastValueVisible: true,
+      priceLineVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      priceFormat: {
+        type: 'custom',
+        formatter: (v) => `${v.toFixed(1)}억`,
+        minMove: 0.01,
+      },
+    });
+    avgSeriesRef.current = avgSeries;
+
+    // Y축 자동 스케일: 동적 provider 설정
+    avgSeries.applyOptions({ autoscaleInfoProvider: yProviderRef.current });
+
+    // X축 변경(팬/줌) 시 Y축 재계산 트리거
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+      if (avgSeriesRef.current) {
+        avgSeriesRef.current.applyOptions({ autoscaleInfoProvider: yProviderRef.current });
+      }
+    });
+
+    // X/Y축 변경 모두 대응 — RAF 루프 (항상 최신 ref 호출)
+    let rafId;
+    const loop = () => {
+      redrawDotsRef.current?.();
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+
+    // ResizeObserver
+    const ro = new ResizeObserver(() => {
+      const w = containerRef.current?.clientWidth || 0;
+      const fontSize = w < 400 ? 9 : w < 600 ? 10 : 11;
+      chart.applyOptions({ width: w, layout: { fontSize } });
+      setChartHeight(getChartHeight(isMobile, w));
+      redrawDotsRef.current?.();
+    });
+    ro.observe(containerRef.current);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
+      chart.remove();
+      chartRef.current = null;
+      volSeriesRef.current = null;
+      avgSeriesRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 데이터 변경 시 시리즈 업데이트
+  useEffect(() => {
+    if (!chartRef.current || !x.length) return;
+
+    // 거래량 데이터
+    const volData = x.map((ym, i) => ({
+      time: toTime(ym),
+      value: vol[i] || 0,
+      color: L1_COLORS.volume,
+    })).sort((a, b) => a.time > b.time ? 1 : -1);
+    volSeriesRef.current?.setData(volData);
+
+    // 평균가 데이터 (0 제외)
+    const avgData = x.map((ym, i) => ({
+      time: toTime(ym),
+      value: avg[i] || null,
+    })).filter(d => d.value).sort((a, b) => a.time > b.time ? 1 : -1);
+    avgSeriesRef.current?.setData(avgData);
+
+    // X축 범위 + Y축 범위 설정
+    requestAnimationFrame(() => {
+      if (!chartRef.current) return;
+      const today = new Date().toISOString().slice(0, 10);
+      const start = new Date();
+      start.setFullYear(start.getFullYear() - yearWindow);
+      const startStr = start.toISOString().slice(0, 10);
+      try {
+        chartRef.current.timeScale().setVisibleRange({ from: startStr, to: today });
+      } catch {
+        chartRef.current.timeScale().fitContent();
+      }
+      redrawDotsRef.current?.();
+    });
+  }, [x, vol, avg, yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // yearWindow 변경 시 X축 범위 업데이트 (Y축은 subscribeVisibleTimeRangeChange가 자동 처리)
+  useEffect(() => {
+    if (!chartRef.current || !x.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const start = new Date();
+    start.setFullYear(start.getFullYear() - yearWindow);
+    const startStr = start.toISOString().slice(0, 10);
+    try {
+      chartRef.current.timeScale().setVisibleRange({ from: startStr, to: today });
+    } catch {
+      chartRef.current.timeScale().fitContent();
+    }
+    requestAnimationFrame(() => redrawDotsRef.current?.());
+  }, [yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{ width: `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
+    {aptName && (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--color-text-main)' }}>{trimAptName(aptName)}</span>
+        {selArea && <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>{selArea.toFixed(1)}㎡</span>}
+      </div>
+    )}
+    <div style={{ position: 'relative', width: '100%', height: chartHeight, border: '1px solid var(--color-border)', borderRadius: 0, overflow: 'hidden' }}>
+      <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
+      {/* SVG overlay — dot 렌더링 */}
+      <svg
+        ref={svgRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      />
+      {/* 스크롤 양보 오버레이: canvas 위에 올려 wheel/touch를 부모로 버블업 */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: OVERLAY_LEFT_W, height: '100%', zIndex: 10 }} />
+      <div style={{ position: 'absolute', top: 0, right: 0, width: OVERLAY_RIGHT_W, height: '100%', zIndex: 10 }} />
+    </div>
+    {/* 범례 — 차트 아래 */}
+    {x.length > 0 && (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
+          <span style={{ width: 12, height: 12, background: L1_COLORS.volume, display: 'inline-block', borderRadius: 2 }} />
+          거래량
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
+          <span style={{ width: 16, height: 2, background: L1_COLORS.avgLine, display: 'inline-block', borderRadius: 2 }} />
+          평균가
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <circle cx="5" cy="5" r="4" fill={L1_COLORS.dot} />
+          </svg>
+          실거래
+        </span>
+        {pPtsX?.length > 0 && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <polygon points="5,1 0,9 10,9" fill={L1_COLORS.triangle} />
+            </svg>
+            입주권
+          </span>
+        )}
+      </div>
+    )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────
+// 메인 컴포넌트
+// ────────────────────────────────────────────
+function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, onClose, isMobile = false, isTablet = false, showMinimap = false, onToggleMinimap, theme = 'rose_slate' }) {
   const aptKey = selectedApt
     ? `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`
     : null;
 
   const isFav = aptKey ? favApts.some(a => a.key === aptKey) : false;
 
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (selectedApt && scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [aptKey]);
+
   // 검색
   const [searchInput, setSearchInput] = useState('');
   const [suggestions, setSuggestions] = useState([]);
 
-  // 전용면적 드래그 스크롤
-  const { scrollRef: areaScrollRef, dragRef, onMouseDown: onAreaMouseDown, onMouseMove: onAreaMouseMove, onMouseUp: endAreaDrag } = useAreaDragScroll();
 
   // 선택 아파트 관련 상태
   const [pnu, setPnu] = useState(null);
   const [pnuErr, setPnuErr] = useState(null);
+  const [showInfo, setShowInfo] = useState(false);
+  const [kaptDetailRow, setKaptDetailRow] = useState(null);
+  const minimapChipScrollRef = useRef(null);
+  useEffect(() => {
+    if (showMinimap && minimapChipScrollRef.current) {
+      minimapChipScrollRef.current.scrollTop = minimapChipScrollRef.current.scrollHeight;
+    }
+  }, [favApts.length, showMinimap]);
   const [areas, setAreas] = useState([]);
   const [selArea, setSelArea] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
@@ -37,56 +462,38 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const [avg, setAvg] = useState([]);
   const [ptsX, setPtsX] = useState([]);
   const [ptsY, setPtsY] = useState([]);
-  const [pPtsX, setPPtsX] = useState([]); // Pdata 산점
+  const [pPtsX, setPPtsX] = useState([]);
   const [pPtsY, setPPtsY] = useState([]);
 
-  // Pdata workbook (handleAreaClick 재사용을 위해 보관)
-  const pdWbRef = React.useRef(null);
+  // workbook refs
+  const pdWbRef      = useRef(null);
+  const wbRef        = useRef(null);
+  const pnuIdxRef    = useRef(null); // Rdata pnu 인덱스
+  const nameIdxRef   = useRef(null); // Rdata aptNm 인덱스
+  const pdNameIdxRef = useRef(null); // Pdata aptNm 인덱스
+  const roadIdxRef   = useRef(null); // Rdata road 인덱스
+  const pdRoadIdxRef = useRef(null); // Pdata road 인덱스
+  const roadKeyRef   = useRef(null); // 현재 아파트 road 키
+
+  // Hot 면적
+  const [hotAreas, setHotAreas] = useState([]);
 
   // 스무딩 윈도우
   const [smoothWindow, setSmoothWindow] = useState(3);
 
-  // X/Y축 범위
-  const [xRange, setXRange] = useState(null);
+  // X축 기간
   const [yearWindow, setYearWindow] = useState(5);
-  const [yRange, setYRange] = useState(null);
-  const [y2Range, setY2Range] = useState(null);
-
-  const janLines = useMemo(() => {
-    if (!x.length) return [];
-    return Array.from(new Set(x.map(ym => ym.slice(0, 4)))).map(y => ({
-      type: 'line', xref: 'x', yref: 'paper',
-      x0: `${y}-01-01`, x1: `${y}-01-01`, y0: 0, y1: 1,
-      line: { width: 1, color: 'rgba(0,0,0,0.10)' },
-    }));
-  }, [x]);
-
-  // X축 범위: 현재 달 기준 최근 N년
-  useEffect(() => {
-    if (!x.length) return;
-    const earliestDate = ymToDate(x[0]);
-    const today = new Date();
-    const anchor = new Date(today.getFullYear(), today.getMonth(), 1);
-    const start = new Date(anchor.getFullYear() - yearWindow, anchor.getMonth(), 1);
-    setXRange([dateToISOYM(start < earliestDate ? earliestDate : start), dateToISOYM(anchor)]);
-  }, [x, yearWindow]);
-
-  // Y축 초기 범위
-  useEffect(() => {
-    if (!x.length) return;
-    const maxVol = Math.max(...vol, 0);
-    const maxPrice = Math.max(...avg, ...ptsY, 0);
-    setYRange([0, maxVol > 0 ? maxVol * 4 : 10]);
-    setY2Range([0, maxPrice > 0 ? maxPrice * 1.3 : 10]);
-  }, [x, vol, avg, ptsX, ptsY]);
 
   // Kakao Places 준비
-  const placesRef = React.useRef(null);
+  const placesRef = useRef(null);
   useEffect(() => {
     if (window.kakao?.maps?.services && !placesRef.current) {
       placesRef.current = new window.kakao.maps.services.Places();
     }
   }, []);
+
+  const [showSearch, setShowSearch] = useState(false);
+  const searchInputRef = useRef(null);
 
   // 검색
   const handleSearch = (e) => {
@@ -99,13 +506,69 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     });
   };
 
-  const handleSuggestionClick = (item) => {
+  const handleSuggestionClick = async (item) => {
     const lat = parseFloat(item.y), lng = parseFloat(item.x);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) onPanTo?.(lat, lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    // 1) 지도 이동
+    onPanTo?.(lat, lng);
     setSuggestions([]);
+    setShowSearch(false);
+    setSearchInput('');
+
+    // 2) 카카오 역지오코딩으로 code5 추출 → CSV 로드 → 좌표 매칭
+    try {
+      const geocoder = new window.kakao.maps.services.Geocoder();
+      geocoder.coord2RegionCode(lng, lat, async (res, status) => {
+        if (status !== window.kakao.maps.services.Status.OK || !res?.length) return;
+        const b = res.find(r => r.region_type === 'B') || res[0];
+        const code5 = (b.code || '').slice(0, 5);
+        const s1 = b.region_1depth_name || '';
+        const s2 = b.region_2depth_name || '';
+        if (!code5 || !s1 || !s2) return;
+
+        const R2_BASE = process.env.NODE_ENV === 'production'
+          ? 'https://pub-8c65c427a291446c9384665be9201bea.r2.dev'
+          : '';
+
+        // code5_map.json으로 정확한 파일명 조회
+        let fileName = `${R2_BASE}/KaptList/${s1}_${s2}_${code5}_list_coord.csv`;
+        try {
+          const mapRes = await fetch(`${R2_BASE}/KaptList/code5_map.json`, { cache: 'no-store' });
+          if (mapRes.ok) {
+            const mapJson = await mapRes.json();
+            if (mapJson?.[code5]) fileName = `${R2_BASE}/KaptList/${mapJson[code5]}`;
+          }
+        } catch { /* 폴백 파일명 사용 */ }
+
+        const csvRes = await fetch(fileName, { cache: 'no-store' });
+        if (!csvRes.ok) return;
+        const { parseCSV } = await import('../styles/csvUtils');
+        const rows = parseCSV(await csvRes.text()).map(row => ({
+          ...row,
+          위도: parseFloat(row['위도']),
+          경도: parseFloat(row['경도']),
+        }));
+
+        // 검색 좌표와 가장 가까운 아파트 찾기 (300m 이내)
+        let best = null, bestDist = Infinity;
+        for (const row of rows) {
+          if (!Number.isFinite(row['위도']) || !Number.isFinite(row['경도'])) continue;
+          const dLat = row['위도'] - lat;
+          const dLng = row['경도'] - lng;
+          const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+          if (dist < bestDist) { bestDist = dist; best = row; }
+        }
+
+        // 약 300m 이내 (위경도 0.003 ≈ 300m)
+        if (best && bestDist < 0.003) {
+          onSelectApt?.(best);
+        }
+      });
+    } catch { /* 매칭 실패 시 지도 이동만 */ }
   };
 
-  // 선택 아파트 변경 시: pnu → 면적 → 차트
+  // 선택 아파트 변경 시
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -113,20 +576,40 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       setAreas([]); setSelArea(null);
       setX([]); setVol([]); setAvg([]); setPtsX([]); setPtsY([]);
       setPPtsX([]); setPPtsY([]);
-      pdWbRef.current = null;
+      pdWbRef.current      = null;
+      wbRef.current        = null;
+      pnuIdxRef.current    = null;
+      nameIdxRef.current   = null;
+      pdNameIdxRef.current = null;
+      roadIdxRef.current   = null;
+      pdRoadIdxRef.current = null;
+      roadKeyRef.current   = null;
+      setHotAreas([]);
       setTradeErr(null);
+      setKaptDetailRow(null);
       if (!selectedApt) return;
 
-      const { pnu: _pnu, reason } = buildPNU(selectedApt);
-      if (!_pnu) { setPnuErr(`data가 없습니다_${reason || 'pnu 생성 실패'}`); return; }
+      const { pnu: _pnu } = buildPNU(selectedApt);
       setPnu(_pnu);
 
       const bjdCode = String(selectedApt['bjdCode'] || '').trim();
       const code5 = bjdCode.slice(0, 5);
       const as1 = selectedApt['as1'] || '', as2 = selectedApt['as2'] || '';
+      const as3 = selectedApt['as3'] || '', as4 = selectedApt['as4'] || '';
+      const _roadKey = parseDoroKey(selectedApt['doroJuso'] || '', as1, as2, as3, as4);
+      roadKeyRef.current = _roadKey;
+
+      // KaptDetail 비동기 로드 (실패해도 무시)
+      fetchKaptDetail(as1, as2, code5)
+        .then(map => {
+          if (cancelled) return;
+          const kaptCode = String(selectedApt['kaptCode'] || '').trim();
+          setKaptDetailRow(map.get(kaptCode) ?? null);
+        })
+        .catch(() => {});
+
       setLoadingInfo(true);
       try {
-        // Rdata + Pdata 병렬 로드 (Pdata 없어도 계속 진행)
         const [rResult, pResult] = await Promise.allSettled([
           fetchWorkbook(as1, as2, code5),
           fetchPdata(as1, as2, code5),
@@ -134,30 +617,113 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         if (cancelled) return;
         if (rResult.status === 'rejected') throw rResult.reason;
 
-        const { wb } = rResult.value;
-        const _pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
-        pdWbRef.current = _pdWb;
+        const { wb, pnuIndex, nameIndex, roadIndex } = rResult.value;
+        const _pdWb        = pResult.status === 'fulfilled' ? pResult.value?.wb        ?? null : null;
+        const _pdNameIndex = pResult.status === 'fulfilled' ? pResult.value?.nameIndex ?? null : null;
+        const _pdRoadIndex = pResult.status === 'fulfilled' ? pResult.value?.roadIndex ?? null : null;
+        pdWbRef.current      = _pdWb;
+        wbRef.current        = wb;
+        pnuIdxRef.current    = pnuIndex    ?? null;
+        nameIdxRef.current   = nameIndex   ?? null;
+        pdNameIdxRef.current = _pdNameIndex;
+        roadIdxRef.current   = roadIndex   ?? null;
+        pdRoadIdxRef.current = _pdRoadIndex;
 
-        const rawList = listAreasForPnu(wb, _pnu, selectedApt['kaptName'] || null);
+        const rawList = listAreasForPnu(wb, _pnu, selectedApt['kaptName'] || null, _pdWb,
+          _roadKey, roadIndex, nameIndex, pnuIndex);
         if (!rawList.length) { setPnuErr('data가 없습니다_면적 후보 없음'); return; }
 
-        const repAreas = groupAreasToRep(rawList, 0.5);
+        const repAreas = groupAreasToRep(rawList);
         setAreas(repAreas);
 
-        const initArea = pickInitialArea(repAreas);
+        // Hot 면적 집계
+        let hot1Area = null;
+        {
+          const cutoff = (() => {
+            const d = new Date();
+            d.setFullYear(d.getFullYear() - 3);
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          })();
+          const pnuStr = _pnu ? String(_pnu) : null;
+          const normName = selectedApt['kaptName'] ? normAptNm(selectedApt['kaptName']) : null;
+          const volMap = new Map();
+
+          for (const obj of (wb || [])) {
+            const match =
+              (pnuStr && String(obj.pnu).trim() === pnuStr) ||
+              (normName && normAptNm(obj.aptNm) === normName);
+            if (!match) continue;
+            const yy = String(obj.dealYear || '').padStart(4, '0');
+            const mm = String(obj.dealMonth || '').padStart(2, '0');
+            if (`${yy}-${mm}` < cutoff) continue;
+            const ar = parseFloat(obj.excluUseAr);
+            if (!Number.isFinite(ar)) continue;
+            const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+            if (rep == null) continue;
+            volMap.set(rep, (volMap.get(rep) || 0) + 1);
+          }
+
+          for (const obj of (_pdWb || [])) {
+            if (parseFloat(obj.isCanceled) === 1) continue;
+            if (normName && normAptNm(obj.aptNm) !== normName) continue;
+            const yy = String(obj.dealYear || '').padStart(4, '0');
+            const mm = String(obj.dealMonth || '').padStart(2, '0');
+            if (`${yy}-${mm}` < cutoff) continue;
+            const ar = parseFloat(obj.excluUseAr);
+            if (!Number.isFinite(ar)) continue;
+            const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+            if (rep == null) continue;
+            volMap.set(rep, (volMap.get(rep) || 0) + 1);
+          }
+
+          const sorted = [...volMap.entries()].sort((a, b) => b[1] - a[1]);
+          setHotAreas(sorted.slice(0, 2).map(([area]) => area));
+          hot1Area = sorted[0]?.[0] ?? null;
+        }
+
+        const initArea = hot1Area ?? pickInitialArea(repAreas);
         setSelArea(initArea);
 
         setLoadingTrade(true);
         const agg = aggregateTradesForArea({
           wb, pdWb: _pdWb, pnu: _pnu,
           kaptName: selectedApt['kaptName'] || null,
-          areaNorm: initArea, areaTol: 0.5, smoothWindow,
+          areaNorm: initArea, smoothWindow,
+          pnuIndex, nameIndex, pdNameIndex: _pdNameIndex,
+          roadKey: _roadKey, roadIndex, pdRoadIndex: _pdRoadIndex,
         });
         if (!cancelled) {
           setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
           setPtsX(agg.ptsX); setPtsY(agg.ptsY);
           setPPtsX(agg.pPtsX); setPPtsY(agg.pPtsY);
           setYearWindow(5);
+        }
+
+        // 백그라운드: 구형 연도 로드 완료 후 차트 조용히 갱신
+        const rVal = rResult.value;
+        if (!cancelled && rVal.isPartial && rVal.fullPromise) {
+          rVal.fullPromise.then((fullWb) => {
+            if (cancelled || !fullWb) return;
+            wbRef.current      = fullWb.wb;
+            pnuIdxRef.current  = fullWb.pnuIndex;
+            nameIdxRef.current = fullWb.nameIndex;
+            clearTradeCacheForPnu(_pnu);
+            const aggFull = aggregateTradesForArea({
+              wb: fullWb.wb, pdWb: pdWbRef.current,
+              pnu: _pnu,
+              kaptName: selectedApt['kaptName'] || null,
+              areaNorm: initArea, smoothWindow,
+              pnuIndex: fullWb.pnuIndex,
+              nameIndex: fullWb.nameIndex,
+              pdNameIndex: pdNameIdxRef.current,
+              roadKey: roadKeyRef.current,
+              roadIndex: fullWb.roadIndex,
+              pdRoadIndex: pdRoadIdxRef.current,
+            });
+            setX(aggFull.x); setVol(aggFull.vol); setAvg(aggFull.avg);
+            setPtsX(aggFull.ptsX); setPtsY(aggFull.ptsY);
+            setPPtsX(aggFull.pPtsX); setPPtsY(aggFull.pPtsY);
+          }).catch(() => {});
         }
       } catch {
         if (!cancelled) setPnuErr('data가 없습니다_엑셀파일 미존재');
@@ -169,9 +735,9 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     return () => { cancelled = true; };
   }, [selectedApt]);
 
-  // smoothWindow 변경 시 현재 면적으로 재집계
+  // smoothWindow 변경 시 재집계
   useEffect(() => {
-    if (!pnu || !selectedApt || selArea === null) return;
+    if (!selectedApt || selArea === null) return;
     let cancelled = false;
     (async () => {
       try {
@@ -181,7 +747,9 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
         const agg = aggregateTradesForArea({
           wb, pdWb: pdWbRef.current, pnu,
           kaptName: selectedApt['kaptName'] || null,
-          areaNorm: selArea, areaTol: 0.5, smoothWindow,
+          areaNorm: selArea, smoothWindow,
+          pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
+          roadKey: roadKeyRef.current, roadIndex: roadIdxRef.current, pdRoadIndex: pdRoadIdxRef.current,
         });
         if (!cancelled) {
           setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
@@ -199,7 +767,7 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
   const handleAreaClick = async (area) => {
     setSelArea(area);
     setTradeErr(null);
-    if (!pnu || !selectedApt) return;
+    if (!selectedApt) return;
     try {
       setLoadingTrade(true);
       const bjdCode = String(selectedApt['bjdCode'] || '').trim();
@@ -207,7 +775,9 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
       const agg = aggregateTradesForArea({
         wb, pdWb: pdWbRef.current, pnu,
         kaptName: selectedApt['kaptName'] || null,
-        areaNorm: area, areaTol: 0.5, smoothWindow,
+        areaNorm: area, smoothWindow,
+        pnuIndex: pnuIdxRef.current, nameIndex: nameIdxRef.current, pdNameIndex: pdNameIdxRef.current,
+        roadKey: roadKeyRef.current, roadIndex: roadIdxRef.current, pdRoadIndex: pdRoadIdxRef.current,
       });
       setX(agg.x); setVol(agg.vol); setAvg(agg.avg);
       setPtsX(agg.ptsX); setPtsY(agg.ptsY);
@@ -225,220 +795,518 @@ function LeftPanel({ selectedApt, onPanTo, favApts, addFavoriteApt, removeFavori
     setYearWindow(prev => Math.max(1, prev + delta));
   };
 
-  const changeY2Max = (delta) => {
-    setY2Range(prev => {
-      if (!prev) return prev;
-      const [min, max] = prev;
-      return [min, Math.max(min + 1, max + delta)];
-    });
-  };
-
-  const handleRelayout = (e) => {
-    if (e['xaxis.range[0]'] && e['xaxis.range[1]']) {
-      setXRange([e['xaxis.range[0]'], e['xaxis.range[1]']]);
-    }
-  };
-
   const infoPairs = useMemo(() => {
     if (!selectedApt) return [];
-    const pick = (k) => {
+    const pickList = (k) => {
       const v = selectedApt[k];
       return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
     };
+    const pickDetail = (k) => {
+      if (!kaptDetailRow) return null;
+      const v = kaptDetailRow[k];
+      return (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();
+    };
+    const fmtDate = (v) => {
+      if (!v || v.length !== 8) return v;
+      return `${v.slice(0, 4)}.${v.slice(4, 6)}.${v.slice(6, 8)}`;
+    };
+    const ageStr = (v) => {
+      if (!v || v.length !== 8) return '';
+      const y = parseInt(v.slice(0, 4), 10);
+      const m = parseInt(v.slice(4, 6), 10);
+      if (isNaN(y) || isNaN(m)) return '';
+      const now = new Date();
+      const total = (now.getFullYear() - y) * 12 + (now.getMonth() + 1 - m);
+      if (total <= 0) return '';
+      const yrs = Math.floor(total / 12);
+      const mos = total % 12;
+      if (yrs === 0) return ` (${mos}개월)`;
+      if (mos === 0) return ` (${yrs}년)`;
+      return ` (${yrs}년${mos}개월)`;
+    };
+    const fmtArea = (v) => {
+      if (!v) return null;
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? `${n.toLocaleString()}㎡` : v;
+    };
+    const 총주차대수 = (() => {
+      const a = parseFloat(pickDetail('kaptdPcnt') || '');
+      const b = parseFloat(pickDetail('kaptdPcntu') || '');
+      if (!Number.isFinite(a) && !Number.isFinite(b)) return null;
+      const total = (Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0);
+      const units = parseFloat(pickList('kaptdaCnt') || '');
+      const perUnit = (Number.isFinite(units) && units > 0) ? (total / units).toFixed(1) : null;
+      return perUnit ? `${total} (세대당 ${perUnit})` : String(total);
+    })();
+    const 승강기수 = (() => {
+      const cnt = parseFloat(pickDetail('kaptdEcnt') || '');
+      if (!Number.isFinite(cnt)) return null;
+      const dong = parseFloat(pickList('kaptDongCnt') || '');
+      const perDong = (Number.isFinite(dong) && dong > 0) ? (cnt / dong).toFixed(1) : null;
+      return perDong ? `${cnt}대 (${perDong}/동)` : `${cnt}대`;
+    })();
+    const CCTV수 = (() => {
+      const cnt = parseFloat(pickDetail('kaptdCccnt') || '');
+      if (!Number.isFinite(cnt)) return null;
+      const area = parseFloat(pickList('kaptTarea') || '');
+      const per = (Number.isFinite(area) && area > 0) ? (cnt / area * 10000).toFixed(1) : null;
+      return per ? `${cnt} (1만㎡당 ${per}대)` : String(cnt);
+    })();
+    const 전기차충전기 = (() => {
+      const a = parseFloat(pickDetail('groundElChargerCnt') || '');
+      const b = parseFloat(pickDetail('undergroundElChargerCnt') || '');
+      if (!Number.isFinite(a) && !Number.isFinite(b)) return null;
+      return `${(Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0)}대`;
+    })();
+    const 전기용량 = (() => {
+      const cap = parseFloat(pickDetail('kaptdEcapa') || '');
+      if (!Number.isFinite(cap)) return null;
+      const units = parseFloat(pickList('kaptdaCnt') || '');
+      const perUnit = (Number.isFinite(units) && units > 0) ? (cap / units).toFixed(1) : null;
+      return perUnit ? `${cap.toLocaleString()} (세대당 ${perUnit}kW)` : cap.toLocaleString();
+    })();
     return [
-      ['주소', pick('kaptAddr')],
-      ['도로', pick('doroJuso')],
-      ['세대', pick('kaptdaCnt')],
-      ['난방', pick('codeHeatNm')],
-      ['구조', pick('codeHallNm')],
-      ['시행', pick('kaptAcompany')],
-      ['시공', pick('kaptBcompany')],
-    ].filter(([, v]) => v);
-  }, [selectedApt]);
+      ['사용승인일',   fmtDate(pickList('kaptUsedate')) ? fmtDate(pickList('kaptUsedate')) + ageStr(pickList('kaptUsedate')) : null],
+      ['건물유형',     pickList('codeAptNm')],
+      ['세대수',       pickList('kaptdaCnt') ? `${String(pickList('kaptdaCnt')).replace(/\.0+$/, '')}세대` : null],
+      ['총주차대수',   총주차대수],
+      ['분양유형',     pickList('codeSaleNm')],
+      ['난방',         pickList('codeHeatNm')],
+      ['시행사',       pickList('kaptAcompany')],
+      ['시공사',       pickList('kaptBcompany')],
+      ['승강기수',     승강기수],
+      ['구조',         pickList('codeHallNm')],
+      ['CCTV수',       CCTV수],
+      ['전기차충전기', 전기차충전기],
+      ['주소(지번)',   (() => { const v = pickList('kaptAddr'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
+      ['주소(도로명)', (() => { const v = pickList('doroJuso'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
+      ['우편번호',     pickList('zipcode')],
+      ['단지면적',     fmtArea(pickList('kaptTarea'))],
+      ['동 수',        pickList('kaptDongCnt') ? `${pickList('kaptDongCnt')}동` : null],
+      ['최고층',       pickList('kaptTopFloor') ? `${pickList('kaptTopFloor')}층` : null],
+      ['지하층',       pickList('kaptBaseFloor') ? `${pickList('kaptBaseFloor')}층` : null],
+      ['관리직원수',   (() => { const cnt = parseFloat(pickDetail('kaptMgrCnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
+      ['관리회사',     pickDetail('kaptCcompany')],
+      ['경비원수',     (() => { const cnt = parseFloat(pickDetail('kaptdScnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
+      ['경비용역사',   pickDetail('kaptdSecCom')],
+      ['청소부수',     (() => { const cnt = parseFloat(pickDetail('kaptdClcnt') || ''); if (!Number.isFinite(cnt)) return null; const units = parseFloat(pickList('kaptdaCnt') || ''); const per = (Number.isFinite(units) && units > 0) ? (cnt / units).toFixed(2).replace(/\.?0+$/, '') : null; return per ? `${cnt}명 (세대당 ${per}명)` : `${cnt}명`; })()],
+      ['전기용량(kW)', 전기용량],
+      ['화재경보기',   pickDetail('codeFalarm')],
+      ['복지시설',     pickDetail('welfareFacility')],
+    ].filter(([, v]) => v !== null && v !== undefined && v !== '');
+  }, [selectedApt, kaptDetailRow]);
 
   const areaRangeText = useMemo(() => {
     if (!areas.length) return '';
     return `${Math.min(...areas).toFixed(1)}~${Math.max(...areas).toFixed(1)}㎡`;
   }, [areas]);
 
+  const isCompact = isMobile || isTablet;
+  const padding = isMobile ? '14px 16px' : isTablet ? '16px 20px' : '20px 24px';
+
   return (
-    <aside
-      style={{
-        width: 380, minWidth: 330, maxWidth: 420,
-        background: '#fff', borderRight: '1.5px solid #e0e0e0',
-        padding: '18px 16px 18px 20px', overflowY: 'auto',
-        display: 'flex', flexDirection: 'column', gap: 12,
-        boxSizing: 'border-box', zIndex: 1,
-      }}
-    >
-      {/* 검색창 */}
-      <form onSubmit={handleSearch} style={{ marginBottom: 8, display: 'flex', gap: 9, alignItems: 'center', position: 'relative' }}>
-        <input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="아파트, 주소, 역, 학교 검색 (Kakao)"
-          style={{ flex: 1, padding: '9px 12px', border: '1.5px solid #e0e0e0', borderRadius: 8, fontSize: '1.06rem', outline: 'none' }}
-          autoComplete="off"
-        />
-        <button
-          type="submit"
-          style={{ background: '#6476FF', color: '#fff', fontWeight: 700, border: 'none', borderRadius: 8, padding: '9px 14px', fontSize: '1.06rem', cursor: 'pointer' }}
+    <aside style={{
+      ...commonPanelStyle,
+      borderRight: '1.5px solid var(--color-border)',
+      borderRadius: 0,
+      boxShadow: 'none',
+    }}>
+      {/* ── 상단 헤더: 아파트명 + 아이콘 버튼들 ── */}
+      <div style={commonHeaderStyle}>
+
+        {/* 지도 아이콘 */}
+        <span
+          style={{
+            color: 'rgba(255,255,255,0.9)',
+            flexShrink: 0,
+            cursor: (isMobile || isTablet) ? 'pointer' : 'default',
+            background: (showMinimap && (isMobile || isTablet)) ? 'rgba(255,255,255,0.22)' : 'none',
+            borderRadius: 6,
+            padding: 2,
+            display: 'flex', alignItems: 'center',
+          }}
+          onClick={(isMobile || isTablet) ? onToggleMinimap : undefined}
         >
-          검색
-        </button>
-        {suggestions.length > 0 && (
-          <ul style={{ position: 'absolute', top: '110%', left: 0, right: 0, background: '#fff', border: '1px solid #dbe5f5', borderRadius: 8, boxShadow: '0 4px 16px 0 #dbe5f533', zIndex: 99, listStyle: 'none', margin: 0, padding: 0 }}>
-            {suggestions.map((item) => (
-              <li key={item.id} onClick={() => handleSuggestionClick(item)} style={{ padding: '9px 12px', cursor: 'pointer', fontSize: '1.0rem' }}>
-                {item.place_name} <span style={{ color: '#888' }}>({item.address_name})</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </form>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <rect x="2" y="6" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.8"/>
+            <line x1="2" y1="13" x2="22" y2="13" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+            <line x1="10" y1="6" x2="10" y2="22" stroke="currentColor" strokeWidth="1.2" opacity="0.45"/>
+            <path d="M16 0C13.2 0 11 2.2 11 5c0 3.5 5 9 5 9s5-5.5 5-9c0-2.8-2.2-5-5-5z" fill="currentColor"/>
+            <circle cx="16" cy="5" r="1.8" fill="white"/>
+          </svg>
+        </span>
 
-      {!selectedApt && <div style={{ flex: 1, background: '#fff' }} />}
-
-      {selectedApt && (
-        <>
-          {/* 아파트명 + 즐겨찾기 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: '1.45rem', fontWeight: 800 }}>{selectedApt.kaptName}</div>
+        {/* 즐겨찾기 단지Pick 버튼 — 아파트 선택 시만 */}
+        {selectedApt && (
+          <div style={{ position: 'relative', flexShrink: 0 }}>
             <button
-              onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
-              style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '1.35rem', color: isFav ? '#f5c518' : '#bbb', padding: 0 }}
-              title="단지 즐겨찾기"
+
+              onClick={() => {
+                if (isFav) {
+                  removeFavoriteApt(aptKey);
+                } else {
+                  addFavoriteApt(selectedApt, areas, hotAreas);
+                }
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 2,
+                border: `1.5px solid ${isFav ? '#f5c518' : 'rgba(255,255,255,0.55)'}`,
+                borderRadius: 20, background: 'none', cursor: 'pointer',
+                padding: '2px 7px', height: 24,
+                fontSize: '0.65rem', fontWeight: 700,
+                color: '#fff', letterSpacing: '0.01em',
+              }}
             >
-              {isFav ? '★' : '☆'}
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
+                <polygon
+                  points="8,2 9.8,6.5 14.5,6.5 10.8,9.5 12.2,14 8,11 3.8,14 5.2,9.5 1.5,6.5 6.2,6.5"
+                  fill={isFav ? '#f5c518' : 'rgba(255,255,255,0.75)'}
+                  stroke={isFav ? '#f5c518' : 'rgba(255,255,255,0.75)'}
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>Pick</span>
             </button>
           </div>
+        )}
 
-          {/* 기본정보 */}
-          <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr', columnGap: 8, rowGap: 6, fontSize: '0.93rem', lineHeight: 1.35, color: '#1f2b49', padding: '10px 10px', borderRadius: 10, maxHeight: 150, overflowY: 'auto' }}>
-            {infoPairs.map(([k, v]) => (
-              <React.Fragment key={k}>
-                <div style={{ color: '#6a7692', fontWeight: 800, textAlign: 'left' }}>{k}</div>
-                <div style={{ color: '#1f2b49', fontWeight: 700, textAlign: 'left', wordBreak: 'keep-all' }}>
-                  {k === '세대' ? String(v).replace(/\.0+$/, '') : v}
-                </div>
-              </React.Fragment>
-            ))}
-          </div>
-          {pnuErr && <div style={{ color: '#c33', marginTop: 6, fontSize: '0.92rem' }}>{pnuErr}</div>}
+        {/* 아파트명 or placeholder */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedApt ? (
+            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1rem', color: '#fff' }}>
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {trimAptName(selectedApt.kaptName)}
+              </span>
+            </span>
+          ) : (
+            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1rem', color: 'rgba(255,255,255,0.45)' }}>
+              아파트를 선택하세요
+            </span>
+          )}
+        </div>
 
-          {/* 전용면적 선택 */}
-          <div style={{ marginTop: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center', fontWeight: 900, fontSize: '1.05rem', color: '#1f2b49', marginBottom: 4 }}>
-              <span>전용면적 선택</span>
-              {areaRangeText && <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#6a7692' }}>{areaRangeText}</span>}
-            </div>
-            <div
-              ref={areaScrollRef}
-              onMouseDown={onAreaMouseDown}
-              onMouseMove={onAreaMouseMove}
-              onMouseUp={endAreaDrag}
-              onMouseLeave={endAreaDrag}
-              style={{ display: 'flex', gap: 8, overflowX: 'auto', overflowY: 'hidden', padding: '6px 4px', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'thin', cursor: dragRef.current?.down ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'pan-x', borderRadius: 10 }}
+        {/* 추가정보 버튼 — 아파트 선택 시만 */}
+        {selectedApt && (
+          <div style={{ flexShrink: 0 }}>
+            <button
+              onClick={() => setShowInfo(p => !p)}
+              style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+              title="추가정보"
             >
-              {areas.map((a) => {
-                const active = selArea === a;
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                <circle cx="9" cy="9" r="7.5" stroke={showInfo ? '#fff' : 'rgba(255,255,255,0.75)'} strokeWidth="1.3"/>
+                <line x1="9" y1="8" x2="9" y2="13" stroke={showInfo ? '#fff' : 'rgba(255,255,255,0.75)'} strokeWidth="1.4" strokeLinecap="round"/>
+                <circle cx="9" cy="5.5" r="0.9" fill={showInfo ? '#fff' : 'rgba(255,255,255,0.75)'}/>
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* 검색 아이콘 */}
+        <div style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              setShowSearch(v => {
+                const next = !v;
+                if (next) setTimeout(() => searchInputRef.current?.focus(), 50);
+                else { setSearchInput(''); setSuggestions([]); }
+                return next;
+              });
+            }}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, display: 'flex', alignItems: 'center' }}
+            title="검색"
+          >
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none">
+              <circle cx="7" cy="7" r="4.5" stroke="rgba(255,255,255,0.75)" strokeWidth="1.3"/>
+              <line x1="10.5" y1="10.5" x2="13.5" y2="13.5" stroke="rgba(255,255,255,0.75)" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+          </button>
+          {showSearch && (
+            <>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); if (e.key === 'Escape') { setShowSearch(false); setSearchInput(''); setSuggestions([]); } }}
+                placeholder="아파트, 주소, 역, 학교 검색"
+                style={{
+                  position: 'absolute', top: '110%', right: 0, zIndex: 99,
+                  width: 220, height: 34, padding: '0 12px',
+                  border: '1.5px solid var(--color-border)', borderRadius: 10,
+                  fontSize: '0.9rem', outline: 'none', background: 'var(--color-surface)',
+                }}
+                autoComplete="off"
+              />
+              {suggestions.length > 0 && (
+                <ul style={{ position: 'absolute', top: 'calc(110% + 38px)', right: 0, width: 240, background: 'var(--color-surface)', border: '1px solid #dbe5f5', borderRadius: 10, boxShadow: '0 4px 16px 0 #dbe5f533', zIndex: 99, listStyle: 'none', margin: 0, padding: 0 }}>
+                  {suggestions.map((item) => (
+                    <li key={item.id} onClick={() => { handleSuggestionClick(item); setShowSearch(false); setSearchInput(''); }} style={{ padding: '10px 14px', cursor: 'pointer', fontSize: '0.9rem', borderBottom: '1px solid var(--color-border)', color: '#222' }}>
+                      {item.place_name} <span style={{ color: 'var(--color-text-disabled)', fontSize: '0.82rem' }}>({item.address_name})</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+
+      </div>
+
+      {/* ── 미니맵 모드: 즐겨찾기 칩만 표시 ── */}
+      {showMinimap && (isMobile || isTablet) && (
+        <div style={{ padding: '8px 12px 10px', background: 'var(--color-surface)' }}>
+          {favApts.length > 0 ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0, alignSelf: 'stretch', minHeight: 20 }} />
+              <div ref={minimapChipScrollRef} style={{
+                display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1,
+                maxHeight: 112, overflowY: 'auto',
+              }}>
+                {favApts.map(fav => {
+                  const isActive = fav.key === aptKey;
+                  return (
+                    <div
+                      key={fav.key}
+                      onClick={() => { onSelectApt?.(fav); if (fav.위도 && fav.경도) onPanTo?.(fav.위도, fav.경도); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        padding: '4px 8px', cursor: 'pointer',
+                        borderRadius: 20,
+                        background: isActive ? 'var(--color-surface-active)' : 'var(--color-surface-2)',
+                        border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
+                      }}
+                    >
+                      <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)', whiteSpace: 'nowrap' }}>
+                        {trimAptName(fav.kaptName)}
+                      </span>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
+                        style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
+                      >✕</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-disabled)', textAlign: 'center', padding: '4px 0 2px' }}>
+              즐겨찾기를 추가하면 여기에 표시돼요
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 단지 정보 팝업 (패널 전체 너비) ── */}
+      {selectedApt && showInfo && (
+        <div style={{
+          position: 'absolute', top: 52, left: 0, right: 0, zIndex: 100,
+          background: 'var(--color-surface)', borderBottom: '1.5px solid var(--color-border)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+          maxHeight: 'calc(100% - 52px)', overflowY: 'auto',
+          padding: '14px 18px',
+          fontFamily: 'Pretendard, -apple-system, sans-serif',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                <rect x="1" y="9" width="8" height="10" rx="0.8" fill="var(--color-text-disabled)"/>
+                <rect x="11" y="5" width="8" height="14" rx="0.8" fill="var(--color-text-faint)"/>
+                <rect x="3" y="11" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="6" y="11" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="3" y="14" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="6" y="14" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="7" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="7" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="10" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="10" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="13" y="13" width="2" height="2" rx="0.3" fill="#fff"/>
+                <rect x="16" y="13" width="2" height="2" rx="0.3" fill="#fff"/>
+              </svg>
+              <span style={{ fontSize: '0.88rem', fontWeight: 800, color: 'var(--color-text-main)', letterSpacing: '0.02em' }}>단지 정보</span>
+            </span>
+            <span onClick={() => setShowInfo(false)} style={{ cursor: 'pointer', fontSize: '0.75rem', color: 'var(--color-text-disabled)', fontWeight: 700, lineHeight: 1 }}>✕</span>
+          </div>
+          {infoPairs.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', borderTop: '1px solid var(--color-border)', marginTop: 6 }}>
+              {infoPairs.map(([k, v], i) => {
+                const rowBg = i % 2 === 0 ? 'var(--color-surface-2)' : 'var(--color-surface-3)';
                 return (
-                  <button
-                    key={a}
-                    onClick={() => handleAreaClick(a)}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    style={{ flex: '0 0 auto', minWidth: 70, padding: '3px 3px', borderRadius: 12, fontWeight: 900, fontSize: '1.0rem', cursor: 'pointer', border: active ? '2px solid #6476FF' : '1px solid #dbe5f5', background: active ? '#6476FF' : '#f7faff', color: active ? '#fff' : '#1f2b49', boxShadow: active ? '0 6px 16px rgba(100,118,255,0.22)' : 'none', transition: 'transform 0.08s ease' }}
-                  >
-                    {a.toFixed(1)}㎡
-                  </button>
+                  <div key={k} style={{ display: 'flex', alignItems: 'center', background: rowBg, borderBottom: '1px solid var(--color-border)' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', fontWeight: 600, flexShrink: 0, width: 80, padding: '7px 8px', lineHeight: 1.35 }}>{k}</span>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 500, color: 'var(--color-text-main)', wordBreak: 'keep-all', overflowWrap: 'break-word', lineHeight: 1.4, padding: '7px 8px', borderLeft: '1px solid var(--color-border)', flex: 1 }}>{v}</span>
+                  </div>
                 );
               })}
             </div>
-            <div style={{ marginTop: 6, fontSize: '0.85rem', color: '#6a7692' }}>좌우로 스와이프(드래그)해서 면적을 선택해.</div>
-          </div>
-
-          {/* 그래프 */}
-          <div style={{ width: '100%', height: 360, background: '#fff', borderRadius: 8, marginTop: 8 }}>
-            {(loadingTrade || loadingInfo) && <div style={{ padding: 12, color: '#6476FF' }}>로딩 중…</div>}
-            {tradeErr && <div style={{ padding: 12, color: '#c33' }}>{tradeErr}</div>}
-
-            {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
-              <>
-                {/* 표시 기간 + 스무딩 조절 */}
-                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', gap: '4px 10px', padding: '6px 10px 0', fontSize: '0.8rem', color: '#444' }}>
-                  <span>실거래 기간 조절</span>
-                  <button onClick={() => changeYearWindow(-1)} style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: '#f7f9fc', cursor: 'pointer' }}>– 1년</button>
-                  <span style={{ minWidth: 10, textAlign: 'center' }}>최근 {yearWindow}년</span>
-                  <button onClick={() => changeYearWindow(+1)} style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: '#f7f9fc', cursor: 'pointer' }}>+ 1년</button>
-                  <span style={{ marginLeft: 6 }}>스무딩</span>
-                  {[1, 3, 6].map(w => (
-                    <button key={w} onClick={() => setSmoothWindow(w)}
-                      style={{ border: '1px solid #d0d7e2', borderRadius: 4, padding: '2px 6px', background: smoothWindow === w ? '#6476FF' : '#f7f9fc', color: smoothWindow === w ? '#fff' : '#444', cursor: 'pointer' }}>
-                      {w === 1 ? '없음' : `${w}M`}
-                    </button>
-                  ))}
-                </div>
-
-                <div style={{ position: 'relative', width: '100%', height: 'calc(100% - 40px)' }}>
-                  <div style={{ position: 'absolute', top: 4, left: 10, zIndex: 6, display: 'flex', gap: 12, alignItems: 'center', fontSize: '0.80rem', fontWeight: 800, color: '#1f2b49', pointerEvents: 'none', background: 'rgba(255,255,255,0.75)', padding: '2px 6px', borderRadius: 6 }}>
-                    <span style={{ color: '#1f77b4' }}>■ 거래량</span>
-                    <span style={{ color: '#ff7f0e' }}>━ 평균가</span>
-                    <span style={{ color: '#2ca02c' }}>● 실거래</span>
-                    {pPtsX.length > 0 && <span style={{ color: '#9467bd' }}>● 분양권</span>}
-                  </div>
-
-                  <Plot
-                    data={[
-                      { type: 'bar', x, y: vol, name: '거래량(건)', marker: { opacity: 0.4, color: '#1f77b4' }, yaxis: 'y1' },
-                      { type: 'scatter', mode: 'lines', x, y: avg, name: '평균(억)', yaxis: 'y2', line: { width: 2, color: '#ff7f0e' } },
-                      { type: 'scatter', mode: 'markers', x: ptsX, y: ptsY, name: '실거래(억)', yaxis: 'y2', opacity: 0.4, marker: { size: 6, color: '#2ca02c' } },
-                      ...(pPtsX.length > 0 ? [{
-                        type: 'scatter', mode: 'markers',
-                        x: pPtsX, y: pPtsY, name: '분양권(억)', yaxis: 'y2',
-                        opacity: 0.55, marker: { size: 7, color: '#9467bd', symbol: 'diamond' },
-                      }] : []),
-                    ]}
-                    layout={{
-                      shapes: janLines,
-                      margin: { t: 24, b: 70, l: 5, r: 70 },
-                      dragmode: 'pan',
-                      showlegend: false,
-                      xaxis: { type: 'date', tickformat: '%Y.%m', tickangle: -45, automargin: true, tickfont: { size: 9 }, range: xRange || undefined },
-                      yaxis: { ticksuffix: '건', tickfont: { size: 9 }, showgrid: false, rangemode: 'tozero', autorange: false, range: yRange || undefined, showticklabels: false, fixedrange: true },
-                      yaxis2: { overlaying: 'y', side: 'right', ticksuffix: '억', tickfont: { size: 9 }, rangemode: 'tozero', autorange: false, range: y2Range || undefined, fixedrange: true },
-                    }}
-                    useResizeHandler
-                    style={{ width: '100%', height: '100%' }}
-                    config={{ responsive: true, scrollZoom: true, displayModeBar: false }}
-                    onRelayout={handleRelayout}
-                  />
-
-                  {/* Y축 조절 버튼 */}
-                  <div style={{ position: 'absolute', top: '50%', right: 6, transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.7rem' }}>
-                    <button onClick={() => changeY2Max(-1)} style={{ padding: '2px 4px', borderRadius: 4, border: '1px solid #d0d7e2', background: '#f7f9fc', cursor: 'pointer' }}>-1억</button>
-                    <button onClick={() => changeY2Max(+1)} style={{ padding: '2px 4px', borderRadius: 4, border: '1px solid #d0d7e2', background: '#f7f9fc', cursor: 'pointer' }}>+1억</button>
-                  </div>
-                </div>
-
-                {/* 즐겨찾기 단지 칩 */}
-                {favApts.length > 0 && (
-                  <div style={{ marginTop: 10, padding: '6px 4px' }}>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 6, color: '#384056' }}>⭐ 즐겨찾기 단지</div>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {favApts.map(fav => (
-                        <div key={fav.key} style={{ padding: '4px 9px', borderRadius: 14, background: '#f0f4ff', fontSize: '0.85rem', fontWeight: 600, color: '#1f2b49' }}>
-                          {fav.kaptName}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </>
+          ) : (
+            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-disabled)', textAlign: 'center', padding: '12px 0' }}>정보 없음</div>
+          )}
+        </div>
       )}
+
+      {/* ── 콘텐츠 영역 ── */}
+      <div ref={scrollRef} style={{
+        flex: 1,
+        overflowY: 'auto',
+        display: (showMinimap && (isMobile || isTablet)) ? 'none' : 'flex',
+        flexDirection: 'column', gap: 14,
+        padding,
+        boxSizing: 'border-box',
+      }}>
+
+      {pnuErr && <div style={{ color: '#c33', fontSize: '0.88rem' }}>{pnuErr}</div>}
+
+      {/* ── 면적선택 영역 ── */}
+      {selectedApt && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+          {/* 노란 세로 바 */}
+          <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0 }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {/* 즐겨찾기 버튼 array */}
+            {favApts.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                {favApts.map(fav => {
+                  const isActive = fav.key === aptKey;
+                  return (
+                    <div key={fav.key}
+                      onClick={() => { onSelectApt?.(fav); if (fav.위도 && fav.경도) onPanTo?.(fav.위도, fav.경도); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 5,
+                        padding: '4px 8px', cursor: 'pointer', borderRadius: 20,
+                        background: isActive ? 'var(--color-surface-active)' : 'var(--color-surface-2)',
+                        border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
+                      }}
+                    >
+                      <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)', whiteSpace: 'nowrap' }}>
+                        {trimAptName(fav.kaptName)}
+                      </span>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
+                        style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
+                        title="즐겨찾기 삭제"
+                      >✕</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* 전용면적 선택 */}
+            <div style={{ flexShrink: 0 }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: 'var(--color-text-disabled)' }} />
+                전용면적 선택 {areaRangeText && <span>{areaRangeText}</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 0, flexWrap: 'wrap' }}>
+                {areas.map((a) => {
+                  const active  = selArea === a;
+                  const hotRank = hotAreas.indexOf(a);
+                  const hotLabel = hotRank === 0 ? 'Hot1' : hotRank === 1 ? 'Hot2' : null;
+                  return (
+                    <div
+                      key={a}
+                      onClick={() => handleAreaClick(a)}
+                      style={{
+                        flex: '0 0 auto', padding: '6px 10px',
+                        fontSize: '0.78rem',
+                        fontWeight: active ? 700 : 400,
+                        color: active ? 'var(--color-text-main)' : 'var(--color-text-muted)',
+                        borderBottom: active ? '2px solid var(--color-text-main)' : '2px solid transparent',
+                        marginBottom: -1, cursor: 'pointer',
+                        position: 'relative', whiteSpace: 'nowrap', transition: 'color 0.1s',
+                      }}
+                    >
+                      {a.toFixed(1)}㎡
+                      {hotLabel && (
+                        <span style={{
+                          position: 'absolute', top: 0, right: 2,
+                          color: '#b35a00', fontSize: '0.62rem', fontWeight: 900,
+                          pointerEvents: 'none', transform: 'rotate(-12deg)',
+                          transformOrigin: 'center center', lineHeight: 1,
+                        }}>
+                          {hotLabel}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 그래프 영역 — 항상 고정 높이로 공간 확보 (미선택 시 광고/공지 placeholder) ── */}
+      <div style={{
+        width: '100%',
+        flexShrink: 0,
+        background: 'var(--color-surface)',
+        borderRadius: 8,
+        border: '0px solid var(--color-border)',
+        marginTop: 4,
+        display: 'flex',
+        flexDirection: 'column',
+      }}>
+        {selectedApt ? (
+          <>
+            {/* X축 기간 조정 — 데이터 있을 때만 */}
+            {!loadingInfo && !loadingTrade && !tradeErr && x.length > 0 && (
+              <div style={{ flex: '0 0 auto', display: 'none', alignItems: 'center', gap: 6, padding: '6px 10px 4px', fontSize: '0.78rem', color: 'var(--color-text-sub)' }}>
+                <span style={{ minWidth: 76, fontWeight: 700, color: 'var(--color-text-main)' }}>X축 기간 조정</span>
+                <button onClick={() => changeYearWindow(-1)} style={{ height: 28, padding: '0 10px', border: '1px solid var(--color-text-disabled)', borderRadius: 6, background: 'var(--color-bg)', cursor: 'pointer', color: 'var(--color-text-sub)' }}>– 1년</button>
+                <span style={{ minWidth: 44, textAlign: 'center' }}>최근 {yearWindow}년</span>
+                <button onClick={() => changeYearWindow(+1)} style={{ height: 28, padding: '0 10px', border: '1px solid var(--color-text-disabled)', borderRadius: 6, background: 'var(--color-bg)', cursor: 'pointer', color: 'var(--color-text-sub)' }}>+ 1년</button>
+              </div>
+            )}
+
+            {/* ── L1: 아파트 실거래 평균가 ── */}
+            <div style={{ position: 'relative' }}>
+              {(loadingTrade || loadingInfo) && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-sub)', fontSize: '0.85rem' }}>
+                  로딩 중…
+                </div>
+              )}
+              {tradeErr && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c33', fontSize: '0.85rem' }}>
+                  {tradeErr}
+                </div>
+              )}
+              {!tradeErr && (
+                <AptTradeChart
+                  x={x} vol={vol} avg={avg}
+                  ptsX={ptsX} ptsY={ptsY}
+                  pPtsX={pPtsX} pPtsY={pPtsY}
+                  yearWindow={yearWindow}
+                  isMobile={false}
+                  aptName={selectedApt?.kaptName}
+                  selArea={selArea}
+                />
+              )}
+            </div>
+          </>
+        ) : (
+          /* TODO: 광고 또는 공지 컴포넌트로 교체 */
+          <div style={{ height: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, background: 'var(--color-bg)', color: 'var(--color-text-disabled)', fontSize: '0.85rem' }}>
+            지도에서 아파트를 클릭하면 거래 차트를 확인할 수 있어요
+          </div>
+        )}
+
+      </div>
+
+      {!(showMinimap && (isMobile || isTablet)) && (
+        <FinanceChart
+          isMobile={isMobile}
+          aptX={x}
+          aptAvg={avg}
+          aptName={selectedApt ? `${trimAptName(selectedApt.kaptName)} ${selArea}㎡` : null}
+          onOpenChartPanel={onOpenChartPanel}
+          theme={theme}
+        />
+      )}
+
+      </div>{/* ── 콘텐츠 영역 끝 ── */}
+
     </aside>
   );
 }

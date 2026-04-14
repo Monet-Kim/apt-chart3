@@ -13,6 +13,19 @@
   }
 }
 
+@keyframes handle-hint {
+  0%   { transform: translateY(0); }
+  20%  { transform: translateY(-4px); }
+  38%  { transform: translateY(0); }
+  56%  { transform: translateY(-3px); }
+  72%  { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
+
+.handle-hint-anim {
+  animation: handle-hint 0.9s ease-in-out 1;
+}
+
 .App-header {
   background-color: #282c34;
   min-height: 100vh;
@@ -41,4 +54,29 @@
   top: unset !important;
   bottom: 0 !important;
   z-index: 100 !important;
+}
+
+/* 전역 스크롤바 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar) var(--color-bg);
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--color-bg);
+  border-radius: 99px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-scrollbar);
+  border-radius: 99px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-scrollbar-hover);
 }
