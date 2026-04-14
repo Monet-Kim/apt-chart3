@@ -303,6 +303,7 @@ function StarIcon({ size = 12, filled = false, strokeColor = '#b0bac8' }) {
 
 function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, onOpenChart, selectedApt = null, favApts = [], addFavoriteApt, removeFavoriteApt, isHidden, relayoutKey, theme = 'rose_slate' }) {
   const mapRef = useRef(null);
+  const [popupVisible, setPopupVisible] = useState(false);
 
   // 패널이 닫히거나 미니맵 모드가 바뀔 때 relayout
   // 슬라이드 애니메이션(300ms) 완료 후 호출해야 지도 크기가 정확히 계산됨
@@ -570,17 +571,18 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       if (typeof onOpenChart === 'function') onOpenChart(row);
     } else {
       if (typeof onSelectApt === 'function') onSelectApt(row);
+      setPopupVisible(true);
       loadSinglePrice(row); // 마커 확장 시 가격 온디맨드 로드
     }
   };
 
-  // 지도 영역 내 클릭/터치 시에만 팝업 닫기 (지도 밖 클릭은 팝업 유지)
+  // 지도 영역 내 클릭/터치 시 팝업만 닫기 — selectedApt(LeftPanel 정보)는 유지
   const mapWrapRef = useRef(null);
   useEffect(() => {
-    if (!selectedApt) return;
+    if (!popupVisible) return;
     const handler = (e) => {
       if (mapWrapRef.current && mapWrapRef.current.contains(e.target)) {
-        if (typeof onSelectApt === 'function') onSelectApt(null);
+        setPopupVisible(false);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -589,7 +591,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
     };
-  }, [selectedApt, onSelectApt]);
+  }, [popupVisible]);
 
   return (
     <div ref={mapWrapRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -628,8 +630,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
           const sel = selectedApt != null &&
             row['kaptName'] === selectedApt['kaptName'] &&
             row['bjdCode'] === selectedApt['bjdCode'];
-          // 선택된 마커는 전용 팝업 섹션에서 렌더링 (위치 재계산 방지)
-          if (sel) return null;
+          // 팝업이 열려있을 때만 전용 팝업 섹션에서 렌더링 (위치 재계산 방지)
+          if (sel && popupVisible) return null;
           const fav = favSet.has(aptKey);
 
           // 레벨 5+: 즐겨찾기→별 / 기본→주황 점
@@ -690,8 +692,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
           const sel = selectedApt != null &&
             fav.kaptName === selectedApt['kaptName'] &&
             fav.bjdCode === selectedApt['bjdCode'];
-          // 선택된 마커는 전용 팝업 섹션에서 렌더링 (위치 재계산 방지)
-          if (sel) return null;
+          // 팝업이 열려있을 때만 전용 팝업 섹션에서 렌더링 (위치 재계산 방지)
+          if (sel && popupVisible) return null;
 
           if (level >= 5) {
             return (
@@ -724,7 +726,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
           );
         })}
         {/* 선택 아파트 전용 팝업 — key 고정으로 재마운트/위치 재계산 방지 */}
-        {selectedApt && (() => {
+        {selectedApt && popupVisible && (() => {
           const aptKey = `${selectedApt['kaptName']}_${selectedApt['bjdCode'] || ''}`;
           const pos = { lat: selectedApt['위도'], lng: selectedApt['경도'] };
           const isFav = favSet.has(aptKey);
