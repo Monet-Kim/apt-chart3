@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import html2canvas from 'html2canvas';
 import ReactDOM from 'react-dom';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
-import { ACCENT_ALPHA, cssVar, SERIES_COLORS } from '../styles/themes';
+import { cssVar, SERIES_COLORS } from '../styles/themes';
+import { FavChip } from '../components/FavoriteButton';
 import { createChart, LineSeries } from 'lightweight-charts';
 import { getChartHeight, CHART_WIDTH_RATIO, OVERLAY_LEFT_W, OVERLAY_RIGHT_W } from '../styles/chartHeight';
 import { ymToDate } from '../styles/dateUtils';
@@ -606,23 +607,6 @@ function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
                 ? (() => { const d = new Date(baseTimeRef.current); return `${d.getFullYear()}/${d.getMonth() + 1}`; })()
                 : ''}
             </div>
-            {/* 그립 핸들 아이콘 */}
-            <div style={{
-              position: 'absolute', bottom: 10, left: '50%',
-              transform: 'translateX(-50%)',
-              display: 'flex', gap: 3, pointerEvents: 'none',
-            }}>
-              {[0, 1].map(col => (
-                <div key={col} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {[0, 1, 2].map(row => (
-                    <div key={row} style={{
-                      width: 2, height: 2, borderRadius: '50%',
-                      background: isDragging ? 'rgba(255,255,255,0.9)' : 'rgba(107,98,91,0.6)',
-                    }} />
-                  ))}
-                </div>
-              ))}
-            </div>
           </div>
         );
       })()}
@@ -1148,29 +1132,18 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
               {favApts.map(fav => {
                 const isActive = fav.key === activeKey;
                 return (
-                  <div key={fav.key} onClick={async () => { setActiveKey(fav.key); await loadAreas(fav); }}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 5,
-                      padding: '4px 8px',
-                      background: isActive ? 'var(--color-surface-active)' : 'var(--color-surface-2)',
-                      border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
-                      borderRadius: 20,
-                      cursor: 'pointer',
-                    }}>
-                    <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)', whiteSpace: 'nowrap' }}>
-                      {trimAptName(fav.kaptName)}
-                    </span>
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeFavoriteApt?.(fav.key);
-                        if (activeKey === fav.key) setActiveKey(null);
-                        setSeries(prev => prev.filter(s => s.key !== fav.key));
-                      }}
-                      style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
-                      title="즐겨찾기 삭제"
-                    >✕</span>
-                  </div>
+                  <FavChip
+                    key={fav.key}
+                    fav={fav}
+                    isActive={isActive}
+                    theme={theme}
+                    onClick={async () => { setActiveKey(fav.key); await loadAreas(fav); }}
+                    onRemove={(key) => {
+                      removeFavoriteApt?.(key);
+                      if (activeKey === key) setActiveKey(null);
+                      setSeries(prev => prev.filter(s => s.key !== key));
+                    }}
+                  />
                 );
               })}
             </div>

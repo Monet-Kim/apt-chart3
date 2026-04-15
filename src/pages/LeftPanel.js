@@ -11,7 +11,8 @@ import {
   clearTradeCacheForPnu, parseDoroKey,
 } from './services/aptData';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
-import { ACCENT_ALPHA, cssVar, SERIES_COLORS } from '../styles/themes';
+import { cssVar, SERIES_COLORS } from '../styles/themes';
+import { PickButton, FavChip } from '../components/FavoriteButton';
 
 // L1 색상 — SERIES_COLORS 기반으로 통일
 const L1_COLORS = {
@@ -116,14 +117,15 @@ function makeChartOptions(height, width = 800) {
 // ────────────────────────────────────────────
 // L1: 아파트 실거래 평균가 + 거래량 + dot 차트
 // ────────────────────────────────────────────
-function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile, aptName, selArea }) {
+export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile, aptName, selArea, compact = false }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const volSeriesRef = useRef(null);
   const avgSeriesRef = useRef(null);
   const svgRef       = useRef(null);
 
-  const [chartHeight, setChartHeight] = useState(getChartHeight(isMobile, window.innerWidth));
+  const COMPACT_H = 130;
+  const [chartHeight, setChartHeight] = useState(compact ? COMPACT_H : getChartHeight(isMobile, window.innerWidth));
 
   // x: ["2020-01", ...] → "YYYY-MM-01" 형태로 변환
   function toTime(ym) {
@@ -243,20 +245,30 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
         borderColor: cssVar('--color-border'),
         scaleMargins: { top: 0, bottom: 0 },
       },
+      ...(compact && {
+        crosshair: {
+          vertLine: { visible: false, labelVisible: false },
+          horzLine: { visible: false, labelVisible: false },
+        },
+        handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
+        handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: { time: false, price: false } },
+      }),
     });
     chartRef.current = chart;
 
-    // 거래량 히스토그램 (왼쪽 overlay, 별도 price scale)
-    const volSeries = chart.addSeries(HistogramSeries, {
-      color: L1_COLORS.volume,
-      priceScaleId: 'vol',
-      lastValueVisible: false,
-      priceLineVisible: false,
-    });
-    chart.priceScale('vol').applyOptions({
-      scaleMargins: { top: 0.75, bottom: 0 }, // 하단 25%만 사용
-    });
-    volSeriesRef.current = volSeries;
+    // 거래량 히스토그램 — compact 모드에서는 생략
+    if (!compact) {
+      const volSeries = chart.addSeries(HistogramSeries, {
+        color: L1_COLORS.volume,
+        priceScaleId: 'vol',
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+      chart.priceScale('vol').applyOptions({
+        scaleMargins: { top: 0.75, bottom: 0 },
+      });
+      volSeriesRef.current = volSeries;
+    }
 
     // 평균가 라인
     const avgSeries = chart.addSeries(LineSeries, {
@@ -298,7 +310,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
       const w = containerRef.current?.clientWidth || 0;
       const fontSize = w < 400 ? 9 : w < 600 ? 10 : 11;
       chart.applyOptions({ width: w, layout: { fontSize } });
-      setChartHeight(getChartHeight(isMobile, w));
+      if (!compact) setChartHeight(getChartHeight(isMobile, w));
       redrawDotsRef.current?.();
     });
     ro.observe(containerRef.current);
@@ -317,13 +329,15 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
   useEffect(() => {
     if (!chartRef.current || !x.length) return;
 
-    // 거래량 데이터
-    const volData = x.map((ym, i) => ({
-      time: toTime(ym),
-      value: vol[i] || 0,
-      color: L1_COLORS.volume,
-    })).sort((a, b) => a.time > b.time ? 1 : -1);
-    volSeriesRef.current?.setData(volData);
+    // 거래량 데이터 — compact 모드에서는 생략
+    if (!compact && volSeriesRef.current) {
+      const volData = x.map((ym, i) => ({
+        time: toTime(ym),
+        value: vol[i] || 0,
+        color: L1_COLORS.volume,
+      })).sort((a, b) => a.time > b.time ? 1 : -1);
+      volSeriesRef.current.setData(volData);
+    }
 
     // 평균가 데이터 (0 제외)
     const avgData = x.map((ym, i) => ({
@@ -364,7 +378,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
   }, [yearWindow]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div style={{ width: `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
+    <div style={{ width: compact ? '100%' : `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
     {aptName && (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 4 }}>
         <span style={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--color-text-main)' }}>{trimAptName(aptName)}</span>
@@ -388,8 +402,8 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
       <div style={{ position: 'absolute', top: 0, left: 0, width: OVERLAY_LEFT_W, height: '100%', zIndex: 10 }} />
       <div style={{ position: 'absolute', top: 0, right: 0, width: OVERLAY_RIGHT_W, height: '100%', zIndex: 10 }} />
     </div>
-    {/* 범례 — 차트 아래 */}
-    {x.length > 0 && (
+    {/* 범례 — compact 모드에서는 생략 */}
+    {!compact && x.length > 0 && (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
           <span style={{ width: 12, height: 12, background: L1_COLORS.volume, display: 'inline-block', borderRadius: 2 }} />
@@ -422,7 +436,7 @@ function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMo
 // ────────────────────────────────────────────
 // 메인 컴포넌트
 // ────────────────────────────────────────────
-function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, onClose, isMobile = false, isTablet = false, showMinimap = false, onToggleMinimap, theme = 'rose_slate' }) {
+function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt, removeFavoriteApt, onOpenChartPanel, onClose, isMobile = false, isTablet = false, onOpenMap, onChartData, isVisible = false, theme = 'rose_slate' }) {
   const aptKey = selectedApt
     ? `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`
     : null;
@@ -444,12 +458,6 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [pnuErr, setPnuErr] = useState(null);
   const [showInfo, setShowInfo] = useState(false);
   const [kaptDetailRow, setKaptDetailRow] = useState(null);
-  const minimapChipScrollRef = useRef(null);
-  useEffect(() => {
-    if (showMinimap && minimapChipScrollRef.current) {
-      minimapChipScrollRef.current.scrollTop = minimapChipScrollRef.current.scrollHeight;
-    }
-  }, [favApts.length, showMinimap]);
   const [areas, setAreas] = useState([]);
   const [selArea, setSelArea] = useState(null);
   const [loadingInfo, setLoadingInfo] = useState(false);
@@ -464,6 +472,11 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
   const [ptsY, setPtsY] = useState([]);
   const [pPtsX, setPPtsX] = useState([]);
   const [pPtsY, setPPtsY] = useState([]);
+
+  // 차트 데이터 리프팅 — 지도탭 compact 차트에서 재사용
+  useEffect(() => {
+    onChartData?.({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, selArea, aptName: selectedApt?.kaptName ?? null });
+  }, [x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, selArea, selectedApt?.kaptName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // workbook refs
   const pdWbRef      = useRef(null);
@@ -920,12 +933,11 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
             color: 'rgba(255,255,255,0.9)',
             flexShrink: 0,
             cursor: (isMobile || isTablet) ? 'pointer' : 'default',
-            background: (showMinimap && (isMobile || isTablet)) ? 'rgba(255,255,255,0.22)' : 'none',
             borderRadius: 6,
             padding: 2,
             display: 'flex', alignItems: 'center',
           }}
-          onClick={(isMobile || isTablet) ? onToggleMinimap : undefined}
+          onClick={(isMobile || isTablet) ? onOpenMap : undefined}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
             <rect x="2" y="6" width="20" height="16" rx="2" stroke="currentColor" strokeWidth="1.8"/>
@@ -939,35 +951,10 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
         {/* 즐겨찾기 단지Pick 버튼 — 아파트 선택 시만 */}
         {selectedApt && (
           <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-
-              onClick={() => {
-                if (isFav) {
-                  removeFavoriteApt(aptKey);
-                } else {
-                  addFavoriteApt(selectedApt, areas, hotAreas);
-                }
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 2,
-                border: `1.5px solid ${isFav ? '#f5c518' : 'rgba(255,255,255,0.55)'}`,
-                borderRadius: 20, background: 'none', cursor: 'pointer',
-                padding: '2px 7px', height: 24,
-                fontSize: '0.65rem', fontWeight: 700,
-                color: '#fff', letterSpacing: '0.01em',
-              }}
-            >
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
-                <polygon
-                  points="8,2 9.8,6.5 14.5,6.5 10.8,9.5 12.2,14 8,11 3.8,14 5.2,9.5 1.5,6.5 6.2,6.5"
-                  fill={isFav ? '#f5c518' : 'rgba(255,255,255,0.75)'}
-                  stroke={isFav ? '#f5c518' : 'rgba(255,255,255,0.75)'}
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              <span>Pick</span>
-            </button>
+            <PickButton
+              isFav={isFav}
+              onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt, areas, hotAreas)}
+            />
           </div>
         )}
 
@@ -1054,49 +1041,6 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
       </div>
 
-      {/* ── 미니맵 모드: 즐겨찾기 칩만 표시 ── */}
-      {showMinimap && (isMobile || isTablet) && (
-        <div style={{ padding: '8px 12px 10px', background: 'var(--color-surface)' }}>
-          {favApts.length > 0 ? (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <div style={{ width: 2.5, borderRadius: 2, background: '#f5c518', flexShrink: 0, alignSelf: 'stretch', minHeight: 20 }} />
-              <div ref={minimapChipScrollRef} style={{
-                display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1,
-                maxHeight: 112, overflowY: 'auto',
-              }}>
-                {favApts.map(fav => {
-                  const isActive = fav.key === aptKey;
-                  return (
-                    <div
-                      key={fav.key}
-                      onClick={() => { onSelectApt?.(fav); if (fav.위도 && fav.경도) onPanTo?.(fav.위도, fav.경도); }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        padding: '4px 8px', cursor: 'pointer',
-                        borderRadius: 20,
-                        background: isActive ? 'var(--color-surface-active)' : 'var(--color-surface-2)',
-                        border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
-                      }}
-                    >
-                      <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)', whiteSpace: 'nowrap' }}>
-                        {trimAptName(fav.kaptName)}
-                      </span>
-                      <span
-                        onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
-                        style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
-                      >✕</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-disabled)', textAlign: 'center', padding: '4px 0 2px' }}>
-              즐겨찾기를 추가하면 여기에 표시돼요
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── 단지 정보 팝업 (패널 전체 너비) ── */}
       {selectedApt && showInfo && (
@@ -1150,7 +1094,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       <div ref={scrollRef} style={{
         flex: 1,
         overflowY: 'auto',
-        display: (showMinimap && (isMobile || isTablet)) ? 'none' : 'flex',
+        display: 'flex',
         flexDirection: 'column', gap: 14,
         padding,
         boxSizing: 'border-box',
@@ -1170,24 +1114,14 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
                 {favApts.map(fav => {
                   const isActive = fav.key === aptKey;
                   return (
-                    <div key={fav.key}
+                    <FavChip
+                      key={fav.key}
+                      fav={fav}
+                      isActive={isActive}
+                      theme={theme}
                       onClick={() => { onSelectApt?.(fav); if (fav.위도 && fav.경도) onPanTo?.(fav.위도, fav.경도); }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 5,
-                        padding: '4px 8px', cursor: 'pointer', borderRadius: 20,
-                        background: isActive ? 'var(--color-surface-active)' : 'var(--color-surface-2)',
-                        border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
-                      }}
-                    >
-                      <span style={{ fontSize: '0.7rem', fontWeight: 800, color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)', whiteSpace: 'nowrap' }}>
-                        {trimAptName(fav.kaptName)}
-                      </span>
-                      <span
-                        onClick={(e) => { e.stopPropagation(); removeFavoriteApt(fav.key); }}
-                        style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
-                        title="즐겨찾기 삭제"
-                      >✕</span>
-                    </div>
+                      onRemove={(key) => removeFavoriteApt(key)}
+                    />
                   );
                 })}
               </div>
@@ -1294,7 +1228,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
 
       </div>
 
-      {!(showMinimap && (isMobile || isTablet)) && (
+      {isVisible && (
         <FinanceChart
           isMobile={isMobile}
           aptX={x}

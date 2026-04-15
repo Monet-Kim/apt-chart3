@@ -6,13 +6,14 @@ if (localStorage.getItem('app_version') !== APP_VERSION) {
   localStorage.setItem('app_version', APP_VERSION);
 }
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import './App.css';
 import Mainmap from './pages/Mainmap';
-import LeftPanel from './pages/LeftPanel';
+import LeftPanel, { AptTradeChart } from './pages/LeftPanel';
+import { FavChipGrid, PickButton } from './components/FavoriteButton';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { useBreakpoint } from './hooks/useBreakpoint';
-import { applyTheme, ACCENT_ALPHA } from './styles/themes';
+import { applyTheme } from './styles/themes';
 
 // 패널 컴포넌트
 import Login from './pages/Login';
@@ -54,76 +55,19 @@ function App() {
 
   // 통합 패널 상태: 'info' | 'login' | 'chart' | 'board' | null
   // 모바일/태블릿 초기 구동: 정보탭 열린 상태로 시작
-  const [openPanel, setOpenPanel] = useState(() => window.innerWidth < 850 ? 'info' : null);
+  const [openPanel, setOpenPanel] = useState(null);
   const [pendingPostContent, setPendingPostContent] = useState(null);
   const [pendingPostTitle, setPendingPostTitle] = useState('');
   const [pendingPostMeta, setPendingPostMeta] = useState(null);
   const [boardIsWriting, setBoardIsWriting]   = useState(false);
   const [chartRestoreKey, setChartRestoreKey] = useState(0);
 
-  // 미니맵 모드: LeftPanel 상단 칩 + 카카오맵 동시 표시 (모바일/태블릿)
-  // 모바일/태블릿 초기 구동: 미니맵(지도 아이콘 클릭) 상태로 시작
-  const [showMinimap, setShowMinimap] = useState(() => window.innerWidth < 850);
-  const [handleHint, setHandleHint] = useState(false);
-  const hintTimerRef = useRef(null);
-  const minimapPanelRef = useRef(null);
-  const [minimapPanelHeight, setMinimapPanelHeight] = useState(0);
-  const handleSwipeRef = useRef({ startY: 0 });
-  const MINIMAP_ANIM_MS = 300;
-  const [minimapAnimState, setMinimapAnimState] = useState(
-    () => (window.innerWidth < 850 ? 'visible' : 'hidden')
-  );
-  const minimapAnimTimerRef = useRef(null);
-  useEffect(() => {
-    if (openPanel !== 'info') setShowMinimap(false);
-  }, [openPanel]);
-  useEffect(() => {
-    if (!showMinimap || !minimapPanelRef.current) { setMinimapPanelHeight(0); return; }
-    const el = minimapPanelRef.current;
-    const obs = new ResizeObserver(() => setMinimapPanelHeight(el.getBoundingClientRect().height));
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [showMinimap]);
-  const openMinimap = useCallback(() => { setOpenPanel('info'); setShowMinimap(true); }, []);
-  const closeMinimap = useCallback(() => { setShowMinimap(false); }, []);
-
-  // 미니맵 지도 슬라이드 애니메이션 상태 머신
-  useEffect(() => {
-    clearTimeout(minimapAnimTimerRef.current);
-    if (showMinimap) {
-      setMinimapAnimState('entering');
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => setMinimapAnimState('visible'))
-      );
-    } else {
-      setMinimapAnimState('leaving');
-      minimapAnimTimerRef.current = setTimeout(
-        () => setMinimapAnimState('hidden'),
-        MINIMAP_ANIM_MS
-      );
-    }
-  }, [showMinimap]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 미니맵 올라온 상태에서 2초 idle → 핸들 힌트 애니메이션
-  useEffect(() => {
-    if (!showMinimap) {
-      clearTimeout(hintTimerRef.current);
-      setHandleHint(false);
-      return;
-    }
-    const onActivity = () => {
-      setHandleHint(false);
-      clearTimeout(hintTimerRef.current);
-      hintTimerRef.current = setTimeout(() => setHandleHint(true), 2000);
-    };
-    window.addEventListener('touchstart', onActivity, { passive: true });
-    window.addEventListener('click',      onActivity);
-    return () => {
-      clearTimeout(hintTimerRef.current);
-      window.removeEventListener('touchstart', onActivity);
-      window.removeEventListener('click',      onActivity);
-    };
-  }, [showMinimap]);
+  // 지도탭 오버레이 state
+  const [mapChartData, setMapChartData] = useState(null);
+  const [showMapChart, setShowMapChart] = useState(true);
+  const [chartPos, setChartPos] = useState({ x: 0, y: 0 });
+  const [chartDragging, setChartDragging] = useState(false);
+  const chartPosRef = useRef({ x: 0, y: 0 });
 
   // 모바일/태블릿 초기 구동: 가장 나중에 추가한 즐겨찾기 단지를 선택 + 지도 이동 + 줌레벨 5
   useEffect(() => {
@@ -149,8 +93,56 @@ function App() {
   useEffect(() => { openPanelRef.current = openPanel; }, [openPanel]);
 
   const boardBackHandlerRef = useRef(null);
-  const openMinimapRef = useRef(null);
-  useEffect(() => { openMinimapRef.current = openMinimap; }, [openMinimap]);
+  const chipAreaRef = useRef(null);
+
+  // 컴팩트 차트 홀드-드래그 — 차트 닫을 때 위치 리셋
+  useEffect(() => {
+    if (!showMapChart) {
+      setChartPos({ x: 0, y: 0 });
+      chartPosRef.current = { x: 0, y: 0 };
+    }
+  }, [showMapChart]);
+
+  const handleChartDown = (e) => {
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    const baseX = chartPosRef.current.x, baseY = chartPosRef.current.y;
+    let dragging = false, moved = false;
+
+    const holdTimer = setTimeout(() => {
+      dragging = true;
+      setChartDragging(true);
+    }, 300);
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (Math.hypot(dx, dy) > 8) moved = true;
+      if (moved && !dragging) { clearTimeout(holdTimer); return; }
+      if (!dragging) return;
+      const nx = baseX + dx, ny = baseY + dy;
+      chartPosRef.current = { x: nx, y: ny };
+      setChartPos({ x: nx, y: ny });
+    };
+
+    const onUp = () => {
+      clearTimeout(holdTimer);
+      if (!dragging && !moved) setOpenPanel('info');
+      dragging = false;
+      setChartDragging(false);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+  const [chipAreaHeight, setChipAreaHeight] = useState(0);
+  useEffect(() => {
+    if (!chipAreaRef.current) return;
+    const ro = new ResizeObserver(([e]) => setChipAreaHeight(e.contentRect.height));
+    ro.observe(chipAreaRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     history.pushState(null, '');
@@ -158,13 +150,13 @@ function App() {
       if (openPanelRef.current === 'board') {
         const handled = boardBackHandlerRef.current?.();
         if (!handled) {
-          openMinimapRef.current?.();   // 메인화면(지도+미니패널)으로
+          setOpenPanel(null);   // 지도탭으로
         }
         history.pushState(null, '');
         return;
       }
       if (openPanelRef.current) {
-        openMinimapRef.current?.();   // 메인화면(지도+미니패널)으로
+        setOpenPanel(null);   // 지도탭으로
         history.pushState(null, '');
       }
     };
@@ -210,7 +202,7 @@ function App() {
       areas,
       hotAreas,
     };
-    setFavApts(prev => prev.some(a => a.key === aptKey) ? prev : [...prev, newFav]);
+    setFavApts(prev => prev.some(a => a.key === aptKey) ? prev : [newFav, ...prev]);
   };
   const removeFavoriteApt = (aptKey) => setFavApts(prev => prev.filter(a => a.key !== aptKey));
 
@@ -222,7 +214,6 @@ function App() {
     setSelectedApt(row || null);
     if (!row) return;
     setOpenPanel('info');
-    if (!isDesktop) setShowMinimap(false);
   }, [isDesktop]);
 
   // 마스터 유저 여부
@@ -231,6 +222,7 @@ function App() {
   // 네비바 아이콘
   const SVG_ATTRS = { viewBox: '0 0 24 24', fill: 'none', strokeWidth: '1.7', strokeLinecap: 'round', strokeLinejoin: 'round', width: 24, height: 24 };
   const NAV_ICONS = {
+    map: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="6" width="20" height="16" rx="2" strokeWidth="1.8"/><line x1="2" y1="13" x2="22" y2="13" strokeWidth="1.2" opacity="0.6"/><line x1="10" y1="6" x2="10" y2="22" strokeWidth="1.2" opacity="0.6"/><path d="M16 0C13.2 0 11 2.2 11 5c0 3.5 5 9 5 9s5-5.5 5-9c0-2.8-2.2-5-5-5z" fill="currentColor" stroke="none"/><circle cx="16" cy="5" r="1.8" fill="var(--color-surface)" stroke="none"/></svg>,
     info: <svg {...SVG_ATTRS} stroke="currentColor"><path d="M3 11L12 3l9 8"/><path d="M5 9v11h5v-5h4v5h5V9"/></svg>,
     chart: <svg {...SVG_ATTRS} stroke="currentColor"><polyline points="3,17 8,10 12,13 16,7 21,9"/><line x1="3" y1="21" x2="21" y2="21"/><line x1="3" y1="21" x2="3" y2="4"/></svg>,
     board: <svg {...SVG_ATTRS} stroke="currentColor"><path d="M4 3h16a1 1 0 011 1v11a1 1 0 01-1 1H8l-5 4V4a1 1 0 011-1z"/></svg>,
@@ -239,6 +231,7 @@ function App() {
   };
 
   const panelButtons = [
+    { icon: NAV_ICONS.map,  label: '지도',    key: 'map'   },
     { icon: NAV_ICONS.info,  label: '정보',    key: 'info'  },
     { icon: NAV_ICONS.chart, label: '단지비교', key: 'chart' },
     { icon: NAV_ICONS.board, label: '게시판',   key: 'board' },
@@ -286,17 +279,18 @@ function App() {
                 onOpenChartPanel={() => togglePanel('chart')}
                 onClose={() => setOpenPanel(null)}
                 isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
+                isVisible={openPanel === 'info'}
                 theme={theme}
               />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} boardIsWriting={boardIsWriting} restoreKey={chartRestoreKey} theme={theme} onWritePost={(html, title, meta) => { setPendingPostContent(html); setPendingPostTitle(title || ''); setPendingPostMeta(meta || null); setOpenPanel('board'); }} onOpenMinimap={openMinimap} />
+              <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} boardIsWriting={boardIsWriting} restoreKey={chartRestoreKey} theme={theme} onWritePost={(html, title, meta) => { setPendingPostContent(html); setPendingPostTitle(title || ''); setPendingPostMeta(meta || null); setOpenPanel('board'); }} onOpenMinimap={() => setOpenPanel(null)} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} pendingPostTitle={pendingPostTitle} pendingPostMeta={pendingPostMeta} onWritingStateChange={setBoardIsWriting} onOpenChart={(meta) => { setFavApts(prev => { const restoreKeys = new Set((meta.apts || []).map(a => a.key)); const filtered = prev.filter(f => !restoreKeys.has(f.key)); return [...(meta.apts || []), ...filtered]; }); setChartRestoreKey(k => k + 1); setOpenPanel('chart'); }} onPendingPostConsumed={() => { setPendingPostContent(null); setPendingPostTitle(''); setPendingPostMeta(null); }} onOpenMinimap={openMinimap} isMobile={isMobile} isTablet={isTablet} />
+              <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} pendingPostTitle={pendingPostTitle} pendingPostMeta={pendingPostMeta} onWritingStateChange={setBoardIsWriting} onOpenChart={(meta) => { setFavApts(prev => { const restoreKeys = new Set((meta.apts || []).map(a => a.key)); const filtered = prev.filter(f => !restoreKeys.has(f.key)); return [...(meta.apts || []), ...filtered]; }); setChartRestoreKey(k => k + 1); setOpenPanel('chart'); }} onPendingPostConsumed={() => { setPendingPostContent(null); setPendingPostTitle(''); setPendingPostMeta(null); }} onOpenMinimap={() => setOpenPanel(null)} isMobile={isMobile} isTablet={isTablet} />
             </div>
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
-              <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} theme={theme} setTheme={setTheme} onOpenMinimap={openMinimap} isMobile={isMobile} isTablet={isTablet} />
+              <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} onUpdateUser={setUser} theme={theme} setTheme={setTheme} onOpenMinimap={() => setOpenPanel(null)} isMobile={isMobile} isTablet={isTablet} />
             </div>
             {isMaster && (
               <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'master' ? 'flex' : 'none', flexDirection: 'column' }}>
@@ -309,28 +303,7 @@ function App() {
 
       {/* ── 지도 영역 ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <div style={
-          (!isDesktop && minimapAnimState !== 'hidden')
-            ? {
-                position: 'absolute',
-                top: minimapPanelHeight + 12,
-                left: 0, right: 0, bottom: 0,
-                borderRadius: '14px 14px 0 0',
-                border: '1.5px solid rgba(190,155,70,0.45)',
-                borderBottom: 'none',
-                overflow: 'hidden',
-                transform: (minimapAnimState === 'entering' || minimapAnimState === 'leaving')
-                  ? 'translateY(110%)'
-                  : 'translateY(0)',
-                transition: minimapAnimState === 'entering'
-                  ? 'none'
-                  : `transform ${MINIMAP_ANIM_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`,
-              }
-            : {
-                position: 'absolute', inset: 0,
-                display: (!isDesktop && openPanel) ? 'none' : 'contents',
-              }
-        }>
+        <div style={{ position: 'absolute', inset: 0, display: (!isDesktop && openPanel) ? 'none' : 'block' }}>
           <Mainmap
             mapCenter={mapCenter}
             setMapCenter={setMapCenter}
@@ -342,8 +315,9 @@ function App() {
             favApts={favApts}
             addFavoriteApt={addFavoriteApt}
             removeFavoriteApt={removeFavoriteApt}
-            isHidden={!isDesktop && !!openPanel && !showMinimap}
-            relayoutKey={showMinimap ? 1 : 0}
+            isHidden={!isDesktop && !!openPanel}
+            relayoutKey={0}
+            mapPaddingTop={!isDesktop && openPanel === null ? chipAreaHeight : 0}
             theme={theme}
           />
         </div>
@@ -356,11 +330,11 @@ function App() {
             zIndex: 7,
           }}>
             {panelButtons.map((btn, i) => {
-              const active = openPanel === btn.key;
+              const active = btn.key === 'map' ? openPanel === null : openPanel === btn.key;
               return (
                 <button
                   key={btn.key}
-                  onClick={() => togglePanel(btn.key)}
+                  onClick={() => btn.key === 'map' ? setOpenPanel(null) : setOpenPanel(btn.key)}
                   style={{
                     width: 48, height: 80,
                     border: '1px solid var(--color-border-strong)', borderLeft: 'none',
@@ -390,20 +364,19 @@ function App() {
       </div>
 
       {/* 모바일·태블릿: 풀스크린 패널 — 지도 영역 밖, App 루트 직계 자식 */}
-      {!isDesktop && openPanel && (
+      {!isDesktop && (
         <div
-          ref={minimapPanelRef}
           style={{
             position: 'fixed',
             top: 0, left: 0, right: 0,
-            bottom: showMinimap ? undefined : 'calc(56px + env(safe-area-inset-bottom, 0px))',
-            background: showMinimap ? 'transparent' : 'var(--color-surface)',
-            display: 'flex', flexDirection: 'column',
+            bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))',
+            background: 'var(--color-surface)',
+            display: openPanel ? 'flex' : 'none', flexDirection: 'column',
             overflow: 'hidden',
             zIndex: 1000,
           }}
         >
-          <div style={{ flex: showMinimap ? undefined : 1, overflow: 'hidden', display: openPanel === 'info' ? 'flex' : 'none', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'info' ? 'flex' : 'none', flexDirection: 'column' }}>
             <LeftPanel
               selectedApt={selectedApt}
               onPanTo={(lat, lng) => setMapCenter({ lat, lng })}
@@ -414,19 +387,20 @@ function App() {
               onOpenChartPanel={() => togglePanel('chart')}
               onClose={() => setOpenPanel(null)}
               isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop}
-              showMinimap={showMinimap}
-              onToggleMinimap={() => setShowMinimap(v => !v)}
+              onOpenMap={() => setOpenPanel(null)}
+              onChartData={setMapChartData}
+              isVisible={openPanel === 'info'}
               theme={theme}
             />
           </div>
           <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'login' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} theme={theme} setTheme={setTheme} onOpenMinimap={openMinimap} isMobile={isMobile} isTablet={isTablet} />
+            <Login user={user} onLoginSuccess={handleLoginSuccess} onLogout={handleLogout} onUpdateUser={setUser} theme={theme} setTheme={setTheme} onOpenMinimap={() => setOpenPanel(null)} isMobile={isMobile} isTablet={isTablet} />
           </div>
           <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'board' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} pendingPostTitle={pendingPostTitle} pendingPostMeta={pendingPostMeta} onWritingStateChange={setBoardIsWriting} onOpenChart={(meta) => { setFavApts(prev => { const restoreKeys = new Set((meta.apts || []).map(a => a.key)); const filtered = prev.filter(f => !restoreKeys.has(f.key)); return [...(meta.apts || []), ...filtered]; }); setChartRestoreKey(k => k + 1); setOpenPanel('chart'); }} onPendingPostConsumed={() => { setPendingPostContent(null); setPendingPostTitle(''); setPendingPostMeta(null); }} onOpenMinimap={openMinimap} isMobile={isMobile} isTablet={isTablet} />
+            <BoardPanel backHandlerRef={boardBackHandlerRef} user={user} pendingPostContent={pendingPostContent} pendingPostTitle={pendingPostTitle} pendingPostMeta={pendingPostMeta} onWritingStateChange={setBoardIsWriting} onOpenChart={(meta) => { setFavApts(prev => { const restoreKeys = new Set((meta.apts || []).map(a => a.key)); const filtered = prev.filter(f => !restoreKeys.has(f.key)); return [...(meta.apts || []), ...filtered]; }); setChartRestoreKey(k => k + 1); setOpenPanel('chart'); }} onPendingPostConsumed={() => { setPendingPostContent(null); setPendingPostTitle(''); setPendingPostMeta(null); }} onOpenMinimap={() => setOpenPanel(null)} isMobile={isMobile} isTablet={isTablet} />
           </div>
           <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'chart' ? 'flex' : 'none', flexDirection: 'column' }}>
-            <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} boardIsWriting={boardIsWriting} restoreKey={chartRestoreKey} theme={theme} onWritePost={(html, title, meta) => { setPendingPostContent(html); setPendingPostTitle(title || ''); setPendingPostMeta(meta || null); setOpenPanel('board'); }} onOpenMinimap={openMinimap} />
+            <ChartPanel isOpen={openPanel === 'chart'} favApts={favApts} removeFavoriteApt={removeFavoriteApt} isMobile={isMobile} isTablet={isTablet} isDesktop={isDesktop} user={user} boardIsWriting={boardIsWriting} restoreKey={chartRestoreKey} theme={theme} onWritePost={(html, title, meta) => { setPendingPostContent(html); setPendingPostTitle(title || ''); setPendingPostMeta(meta || null); setOpenPanel('board'); }} onOpenMinimap={() => setOpenPanel(null)} />
           </div>
           {isMaster && (
             <div style={{ flex: 1, overflow: 'hidden', display: openPanel === 'master' ? 'flex' : 'none', flexDirection: 'column' }}>
@@ -436,44 +410,117 @@ function App() {
         </div>
       )}
 
-      {/* 미니맵 스와이프 핸들 바 */}
-      {!isDesktop && openPanel && (
-        <div
-          style={{
-            position: 'fixed',
-            ...(showMinimap
-              ? { top: minimapPanelHeight, left: 0, right: 0 }
-              : { bottom: 'calc(56px + env(safe-area-inset-bottom, 0px))', left: 0, right: 0 }
-            ),
-            height: 20,
-            zIndex: 1010,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'pointer',
-            touchAction: 'none',
-            background: showMinimap ? 'rgba(253,251,248,0.85)' : 'rgba(253,251,248,0.95)',
-          }}
-          onTouchStart={(e) => { handleSwipeRef.current.startY = e.touches[0].clientY; }}
-          onTouchMove={(e) => e.preventDefault()}
-          onTouchEnd={(e) => {
-            const dy = e.changedTouches[0].clientY - handleSwipeRef.current.startY;
-            if (showMinimap && dy > 40) closeMinimap();
-            if (!showMinimap && dy < -40) openMinimap();
-          }}
-          onClick={() => showMinimap ? closeMinimap() : openMinimap()}
-        >
-          <div
-            className={showMinimap && handleHint ? 'handle-hint-anim' : ''}
-            onAnimationEnd={() => {
-              setHandleHint(false);
-              hintTimerRef.current = setTimeout(() => setHandleHint(true), 2000);
-            }}
-            style={{
-              width: 36, height: 4, borderRadius: 2,
-              background: showMinimap ? ACCENT_ALPHA[theme].a55 : 'var(--color-border-strong)',
-            }}
-          />
+
+      {/* 지도탭 오버레이 — 칩 + compact L1 차트 */}
+      {!isDesktop && openPanel === null && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 500, pointerEvents: 'none' }}>
+          {/* 칩 행 — FavChipGrid (2줄 페이지네이션) */}
+          {favApts.length > 0 && (
+            <div ref={chipAreaRef} style={{
+              padding: '6px 10px 6px',
+              background: 'var(--color-primary)',
+              borderBottom: '1.5px solid var(--color-primary-border)',
+              pointerEvents: 'auto',
+              display: 'flex', alignItems: 'flex-start', gap: 6,
+            }}>
+              {selectedApt && (() => {
+                const aptKey = `${selectedApt.kaptName}_${selectedApt.bjdCode || ''}`;
+                const isFav = favApts.some(a => a.key === aptKey);
+                return (
+                  <PickButton
+                    isFav={isFav}
+                    onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt)}
+                  />
+                );
+              })()}
+              <FavChipGrid
+                favApts={favApts}
+                selectedApt={selectedApt}
+                theme={theme}
+                onSelect={(fav) => {
+                  setSelectedApt(fav);
+                  if (fav['위도'] && fav['경도']) setMapCenter({ lat: Number(fav['위도']), lng: Number(fav['경도']) });
+                }}
+                onRemove={removeFavoriteApt}
+              />
+            </div>
+          )}
+
+
+            {/* compact 차트 — 우측 정렬, 라운드, 토글 버튼 내장 */}
+            {mapChartData?.x?.length > 0 && (
+              <div style={{
+                pointerEvents: 'none',
+                display: 'flex', justifyContent: 'flex-end',
+                padding: '10px 10px 0',
+              }}>
+                <div style={{
+                  pointerEvents: 'auto',
+                  width: '50%',
+                  background: 'var(--color-surface)',
+                  borderRadius: 12,
+                  border: '1px solid var(--marker-active)',
+                  overflow: 'hidden',
+                  boxShadow: chartDragging ? '0 8px 24px rgba(0,0,0,0.22)' : '0 2px 8px rgba(0,0,0,0.10)',
+                  position: 'relative',
+                  minHeight: showMapChart ? 0 : 'auto',
+                  transform: `translate(${chartPos.x}px, ${chartPos.y}px)`,
+                  transition: chartDragging ? 'none' : 'box-shadow 0.2s',
+                  cursor: chartDragging ? 'grabbing' : 'default',
+                  userSelect: 'none',
+                }}>
+                  {/* 접힌 상태: 타이틀 + 토글 버튼 */}
+                  {!showMapChart && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '5px 8px',
+                    }}>
+                      <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--color-text-sub)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {mapChartData.aptName}{mapChartData.selArea ? ` ${mapChartData.selArea}㎡` : ''}
+                      </span>
+                      <button
+                        onClick={() => setShowMapChart(true)}
+                        style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '0 0 0 6px', fontSize: '0.6rem', fontWeight: 700, color: 'var(--color-text-disabled)', flexShrink: 0 }}
+                      >▼</button>
+                    </div>
+                  )}
+                  {/* 펼친 상태: 토글 버튼 + 차트 */}
+                  {showMapChart && (
+                    <button
+                      onClick={() => setShowMapChart(false)}
+                      style={{
+                        position: 'absolute', top: 5, right: 5, zIndex: 2,
+                        border: 'none', background: 'none', cursor: 'pointer',
+                        padding: '2px 5px', fontSize: '0.6rem', fontWeight: 700,
+                        color: 'var(--color-text-disabled)', lineHeight: 1,
+                      }}
+                    >▲</button>
+                  )}
+                  <div
+                    style={{ display: showMapChart ? 'block' : 'none' }}
+                    onPointerDown={handleChartDown}
+                  >
+                    <AptTradeChart
+                      compact
+                      x={mapChartData.x}
+                      vol={mapChartData.vol}
+                      avg={mapChartData.avg}
+                      ptsX={mapChartData.ptsX}
+                      ptsY={mapChartData.ptsY}
+                      pPtsX={mapChartData.pPtsX}
+                      pPtsY={mapChartData.pPtsY}
+                      selArea={mapChartData.selArea}
+                      aptName={mapChartData.aptName}
+                      yearWindow={5}
+                      isMobile={isMobile}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
         </div>
       )}
+
 
       {/* 모바일·태블릿 하단 네비게이션 바 */}
       {!isDesktop && (
@@ -489,12 +536,12 @@ function App() {
           boxShadow: '0 -1px 0 rgba(0,0,0,0.06)',
         }}>
           {panelButtons.map(btn => {
-            const active = openPanel === btn.key;
+            const active = btn.key === 'map' ? openPanel === null : openPanel === btn.key;
             return (
               <button
                 key={btn.key}
                 onClick={() => {
-                  if (btn.key === 'info' && showMinimap) { setShowMinimap(false); }
+                  if (btn.key === 'map') { setOpenPanel(null); }
                   else if (!active) { togglePanel(btn.key); }
                 }}
                 style={{

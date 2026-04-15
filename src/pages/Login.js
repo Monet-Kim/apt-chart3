@@ -1,10 +1,12 @@
 // pages/Login.js
-import React from 'react';
+import React, { useState } from 'react';
 import KakaoLogin from 'react-kakao-login';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import { THEMES, applyTheme } from '../styles/themes';
 
-function Login({ user, onLoginSuccess, onLogout, onClose, theme = 'rose_slate', setTheme, onOpenMinimap, isMobile = false, isTablet = false }) {
+function Login({ user, onLoginSuccess, onLogout, onClose, onUpdateUser, theme = 'rose_slate', setTheme, onOpenMinimap, isMobile = false, isTablet = false }) {
+  const [editingNick, setEditingNick] = useState(false);
+  const [nickInput, setNickInput] = useState('');
   const handleSuccess = (data) => {
 const properties = data?.profile?.properties || {};
     const kakaoProfile = data?.profile?.kakao_account?.profile || {};
@@ -91,6 +93,64 @@ const properties = data?.profile?.properties || {};
             >
               로그아웃
             </button>
+
+            {/* 게시판 닉네임 설정 */}
+            <div style={{
+              width: '100%', maxWidth: 280,
+              border: `1.5px solid ${user.boardNickname ? 'var(--color-border)' : 'var(--color-accent)'}`,
+              borderRadius: 10, padding: '14px 16px',
+              background: user.boardNickname ? 'var(--color-surface)' : 'var(--color-surface)',
+            }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-accent)', marginBottom: 8, letterSpacing: '0.04em' }}>
+                게시판 닉네임
+              </div>
+              {!user.boardNickname && !editingNick && (
+                <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: 10 }}>
+                  글 작성에 사용할 닉네임을 설정하세요
+                </div>
+              )}
+              {(editingNick || !user.boardNickname) ? (
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    autoFocus
+                    value={nickInput}
+                    onChange={e => setNickInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { const t = nickInput.trim(); if (t) { onUpdateUser?.({ ...user, boardNickname: t }); setEditingNick(false); } } }}
+                    maxLength={10}
+                    placeholder="최대 10자"
+                    style={{
+                      flex: 1, border: '1.5px solid var(--color-border)', borderRadius: 6,
+                      padding: '6px 10px', fontSize: '0.88rem', outline: 'none',
+                      background: 'var(--color-bg)', color: 'var(--color-text-main)',
+                    }}
+                  />
+                  <button
+                    onClick={() => { const t = nickInput.trim(); if (t) { onUpdateUser?.({ ...user, boardNickname: t }); setEditingNick(false); } }}
+                    style={{ padding: '6px 12px', background: 'var(--color-accent)', color: '#fff', border: 'none', borderRadius: 6, fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer' }}
+                  >
+                    저장
+                  </button>
+                  {user.boardNickname && (
+                    <button
+                      onClick={() => setEditingNick(false)}
+                      style={{ padding: '6px 10px', background: 'none', color: 'var(--color-text-faint)', border: '1.5px solid var(--color-border)', borderRadius: 6, fontSize: '0.82rem', cursor: 'pointer' }}
+                    >
+                      취소
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--color-text-main)' }}>{user.boardNickname}</span>
+                  <button
+                    onClick={() => { setNickInput(user.boardNickname); setEditingNick(true); }}
+                    style={{ padding: '4px 10px', background: 'none', color: 'var(--color-text-faint)', border: '1.5px solid var(--color-border)', borderRadius: 6, fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    수정
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         ) : (
           <KakaoLogin

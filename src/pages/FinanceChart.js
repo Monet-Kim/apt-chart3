@@ -798,23 +798,6 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
                   ? (() => { const d = new Date(baseTimeRef.current); return `${d.getFullYear()}/${d.getMonth() + 1}`; })()
                   : ''}
               </div>
-              {/* 그립 핸들 아이콘 */}
-              <div style={{
-                position: 'absolute', bottom: 10, left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex', gap: 3, pointerEvents: 'none',
-              }}>
-                {[0, 1].map(col => (
-                  <div key={col} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {[0, 1, 2].map(row => (
-                      <div key={row} style={{
-                        width: 2, height: 2, borderRadius: '50%',
-                        background: isDraggingFlag ? 'rgba(255,255,255,0.9)' : 'rgba(107,98,91,0.6)',
-                      }} />
-                    ))}
-                  </div>
-                ))}
-              </div>
             </div>
           );
         })()}

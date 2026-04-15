@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
+import RichTextEditor, { isEditorEmpty } from '../components/RichTextEditor';
 
 /* ── 공통 버튼/입력 스타일 ── */
 
@@ -42,18 +43,6 @@ const closeBtn = {
 };
 const IconTrash  = () => <SVG size={16}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></SVG>;
 
-/* ── HTML → 평문 변환 (글 수정 시 사용) ── */
-function htmlToText(html) {
-  if (!html) return '';
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>|<\/div>|<\/h[1-6]>/gi, '\n')
-    .replace(/<img[^>]*>/gi, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-    .trim();
-}
 
 /* ── 상세보기 HTML 렌더링 ── */
 function renderContent(post) {
@@ -155,8 +144,20 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
   };
 
   const openWriteForm = () => {
-    setAuthor(user?.nickname || '');
+    // 임시저장 불러오기
+    try {
+      const draft = JSON.parse(localStorage.getItem('board-draft') || 'null');
+      if (draft) {
+        setTitle(draft.title || '');
+        setTextContent(draft.textContent || '');
+      }
+    } catch {}
+    setAuthor(user?.boardNickname || user?.nickname || '');
     setShowForm(true);
+  };
+
+  const handleSaveDraft = () => {
+    localStorage.setItem('board-draft', JSON.stringify({ title, textContent }));
   };
 
   useEffect(() => {
@@ -164,7 +165,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
     chartAttachRef.current = pendingPostContent;
     pendingPostMetaRef.current = pendingPostMeta || null;
     setTextContent('');
-    setAuthor(user?.nickname || '');
+    setAuthor(user?.boardNickname || user?.nickname || '');
     setTitle(pendingPostTitle || '');
     setShowForm(true);
     onPendingPostConsumed?.();
@@ -173,12 +174,10 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
   const handlePost = (e) => {
     e.preventDefault();
     if (!author.trim() || !title.trim()) return;
-    if (!textContent.trim() && !chartAttachRef.current) return;
+    if (isEditorEmpty(textContent) && !chartAttachRef.current) return;
 
     // 최종 HTML: 차트 이미지(있으면) + 텍스트
-    const textHtml = textContent.trim()
-      ? `<p style="white-space:pre-wrap">${textContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`
-      : '';
+    const textHtml = isEditorEmpty(textContent) ? '' : textContent;
     const finalHtml = (chartAttachRef.current || '') + textHtml;
 
     const isEdit = Boolean(editingPostId);
@@ -197,6 +196,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
       ? posts.map(p => p.id === editingPostId ? newPost : p)
       : [newPost, ...posts];
     savePosts(arr);
+    localStorage.removeItem('board-draft');
     resetForm();
   };
 
@@ -218,7 +218,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
   };
 
   const handleEditPost = () => {
-    setTextContent(htmlToText(selectedPost.contentHtml || ''));
+    setTextContent(selectedPost.contentHtml || '');
     chartAttachRef.current = null;
     setAuthor(user?.nickname || selectedPost.author);
     setTitle(selectedPost.title);
@@ -317,18 +317,20 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
         style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', display: 'flex', flexDirection: 'column' }}>
 
         {/* 제목 — 위로 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', height: 46, flexShrink: 0, borderBottom: '1px solid var(--color-border)' }}>
-          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-accent)', width: 36, flexShrink: 0, textAlign: 'justify', textAlignLast: 'justify' }}>제&nbsp;&nbsp;목</span>
-          <input
-            placeholder="제목을 입력하세요"
-            value={title} onChange={e => setTitle(e.target.value)}
-            maxLength={40} required
-            style={{
-              flex: 1, border: 'none', outline: 'none',
-              fontWeight: 800, fontSize: '0.95rem', padding: 0,
-              background: 'transparent', color: 'var(--color-text-main)',
-            }}
-          />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0, height: 46, flexShrink: 0, borderBottom: '1px solid var(--color-border)', background: 'var(--color-bg)' }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-accent)', width: 60, flexShrink: 0, textAlign: 'center', padding: '0 8px' }}>제&nbsp;&nbsp;목</span>
+          <div style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', background: 'var(--color-surface)', boxShadow: '-2px 0 6px rgba(0,0,0,0.06)' }}>
+            <input
+              placeholder="제목을 입력하세요"
+              value={title} onChange={e => setTitle(e.target.value)}
+              maxLength={40} required
+              style={{
+                flex: 1, border: 'none', outline: 'none',
+                fontWeight: 800, fontSize: '0.95rem', padding: '0 16px',
+                background: 'transparent', color: 'var(--color-text-main)',
+              }}
+            />
+          </div>
         </div>
 
         {/* 작성자 — 아래, 더 작고 연하게 */}
@@ -363,23 +365,21 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
           />
         )}
 
-        {/* 내용 textarea */}
+        {/* 내용 에디터 */}
         <div style={{ padding: '10px 16px 4px', fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-faint)', letterSpacing: '0.05em' }}>
           내용
         </div>
-        <textarea
-          value={textContent}
-          onChange={e => setTextContent(e.target.value)}
-          placeholder="내용을 입력하세요"
-          style={{
-            flex: 1, resize: 'none',
-            border: 'none', outline: 'none',
-            padding: '4px 16px 16px',
-            fontSize: '0.95rem', lineHeight: 1.75,
-            background: 'transparent', color: 'var(--color-text-main)',
-            fontFamily: 'inherit',
-          }}
-        />
+        <RichTextEditor content={textContent} onChange={setTextContent} />
+
+        {/* 하단 버튼 */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 12px', background: 'var(--color-bg)', borderTop: '1px solid var(--color-border)', flexShrink: 0 }}>
+          <button type="button" onClick={handleSaveDraft} style={{ ...btnSecondary, height: 34, padding: '0 14px', fontSize: '0.82rem' }}>
+            임시저장
+          </button>
+          <button type="submit" form="board-write-form" style={{ height: 34, padding: '0 18px', fontSize: '0.82rem', fontWeight: 700, background: 'var(--color-accent)', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+            {editingPostId ? '수정 완료' : '등록'}
+          </button>
+        </div>
       </form>
     </aside>
   );

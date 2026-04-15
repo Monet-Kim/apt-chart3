@@ -8,7 +8,7 @@ import { MAP_ALPHA } from '../styles/themes';
 import {
   buildPNU, fetchWorkbook, fetchPdata,
   listAreasForPnu, aggregateTradesForArea,
-  pickInitialArea, groupAreasToRep,
+  pickInitialArea, groupAreasToRep, normAptNm,
 } from './services/aptData';
 
 const fileCache    = new Map();
@@ -288,22 +288,31 @@ function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
 
 // 별 아이콘: filled=true → 노란 채움, false → 테두리만
 function StarIcon({ size = 12, filled = false, strokeColor = '#b0bac8' }) {
+  const sw = (12 / size) * 1.1;
   return (
     <svg width={size} height={size} viewBox="0 0 12 12" style={{ display: 'block', flexShrink: 0 }}>
       <polygon
         points="6,0.5 7.35,4.14 11.23,4.3 8.19,6.71 9.23,10.45 6,8.3 2.77,10.45 3.81,6.71 0.77,4.3 4.65,4.14"
         fill={filled ? '#FFD700' : 'none'}
         stroke={filled ? '#e6a800' : strokeColor}
-        strokeWidth="1.1"
+        strokeWidth={sw}
         strokeLinejoin="round"
       />
     </svg>
   );
 }
 
-function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, onOpenChart, selectedApt = null, favApts = [], addFavoriteApt, removeFavoriteApt, isHidden, relayoutKey, theme = 'rose_slate' }) {
+function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, onOpenChart, selectedApt = null, favApts = [], addFavoriteApt, removeFavoriteApt, isHidden, relayoutKey, mapPaddingTop = 0, theme = 'rose_slate' }) {
   const mapRef = useRef(null);
+  const kakaoMapRef = useRef(null);
   const [popupVisible, setPopupVisible] = useState(false);
+
+  // 칩 영역 높이만큼 지도 상단 패딩 적용 — 팝업이 칩 아래에 표시되도록
+  useEffect(() => {
+    if (kakaoMapRef.current?.setPadding) {
+      kakaoMapRef.current.setPadding(mapPaddingTop, 0, 0, 0);
+    }
+  }, [mapPaddingTop]);
 
   // 패널이 닫히거나 미니맵 모드가 바뀔 때 relayout
   // 슬라이드 애니메이션(300ms) 완료 후 호출해야 지도 크기가 정확히 계산됨
@@ -421,10 +430,10 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
     [favApts]
   );
 
-  // 클릭한 마커 1개의 가격·면적을 온디맨드로 로드
+  // 클릭한 마커 1개의 가격·면적을 온디맨드로 로드 (L1과 동일한 면적 선택 알고리즘)
   const loadSinglePrice = async (row) => {
     const key = `${row['kaptName']}_${row['bjdCode'] || ''}`;
-    if (priceDoneRef.current.has(key)) return; // 이미 캐시됨
+    if (priceDoneRef.current.has(key)) return;
     const code5 = String(row['bjdCode'] || '').slice(0, 5);
     if (!code5) return;
     try {
@@ -438,10 +447,53 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       const pdWb = pResult.status === 'fulfilled' ? pResult.value?.wb ?? null : null;
       const { pnu } = buildPNU(row);
       if (!pnu) return;
-      const rawAreas = listAreasForPnu(wb, pnu, row['kaptName'] || null);
+
+      // L1과 동일: pdWb 포함해서 면적 수집
+      const rawAreas = listAreasForPnu(wb, pnu, row['kaptName'] || null, pdWb);
       const repAreas = groupAreasToRep(rawAreas);
-      const area = pickInitialArea(repAreas);
+      if (!repAreas.length) return;
+
+      // L1과 동일: 최근 3년 거래량 최다 면적 우선 선택
+      const cutoff = (() => {
+        const d = new Date();
+        d.setFullYear(d.getFullYear() - 3);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      })();
+      const pnuStr = String(pnu);
+      const normName = row['kaptName'] ? normAptNm(row['kaptName']) : null;
+      const volMap = new Map();
+
+      for (const obj of (wb || [])) {
+        const match = (String(obj.pnu).trim() === pnuStr) ||
+                      (normName && normAptNm(obj.aptNm) === normName);
+        if (!match) continue;
+        const yy = String(obj.dealYear || '').padStart(4, '0');
+        const mm = String(obj.dealMonth || '').padStart(2, '0');
+        if (`${yy}-${mm}` < cutoff) continue;
+        const ar = parseFloat(obj.excluUseAr);
+        if (!Number.isFinite(ar)) continue;
+        const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+        if (rep == null) continue;
+        volMap.set(rep, (volMap.get(rep) || 0) + 1);
+      }
+
+      for (const obj of (pdWb || [])) {
+        if (parseFloat(obj.isCanceled) === 1) continue;
+        if (normName && normAptNm(obj.aptNm) !== normName) continue;
+        const yy = String(obj.dealYear || '').padStart(4, '0');
+        const mm = String(obj.dealMonth || '').padStart(2, '0');
+        if (`${yy}-${mm}` < cutoff) continue;
+        const ar = parseFloat(obj.excluUseAr);
+        if (!Number.isFinite(ar)) continue;
+        const rep = repAreas.find(r => Math.abs(r - ar) <= (r <= 85 ? 0.9 : r * 0.01));
+        if (rep == null) continue;
+        volMap.set(rep, (volMap.get(rep) || 0) + 1);
+      }
+
+      const hot1Area = [...volMap.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      const area = hot1Area ?? pickInitialArea(repAreas);
       if (!area) return;
+
       const agg = aggregateTradesForArea({
         wb, pdWb, pnu, kaptName: row['kaptName'] || null,
         areaNorm: area, smoothWindow: 3,
@@ -576,31 +628,23 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
     }
   };
 
-  // 지도 영역 내 클릭/터치 시 팝업만 닫기 — selectedApt(LeftPanel 정보)는 유지
-  const mapWrapRef = useRef(null);
-  useEffect(() => {
-    if (!popupVisible) return;
-    const handler = (e) => {
-      if (mapWrapRef.current && mapWrapRef.current.contains(e.target)) {
-        setPopupVisible(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('touchstart', handler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('touchstart', handler);
-    };
-  }, [popupVisible]);
+  // 지도 배경 클릭/터치 시 팝업만 닫기 — selectedApt(LeftPanel 정보)는 유지
+  // KakaoMap onClick은 clickable 오버레이(마커)를 누를 때 발생하지 않으므로 마커 클릭과 충돌 없음
+  const handleMapClick = useCallback(() => {
+    setPopupVisible(false);
+  }, []);
 
   return (
-    <div ref={mapWrapRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <KakaoMap
         ref={mapRef}
         center={mapCenter}
         style={{ width: '100%', height: '100%' }}
         level={level}
+        onCreate={(map) => { kakaoMapRef.current = map; }}
+        onClick={handleMapClick}
         onCenterChanged={(map) => {
+          kakaoMapRef.current = map;
           setMapCenter({ lat: map.getCenter().getLat(), lng: map.getCenter().getLng() });
           const lv = map.getLevel();
           setLevel(lv);
