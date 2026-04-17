@@ -18,7 +18,7 @@ const aptNameKeyframes = `
 @keyframes aptNameHighlightText {
   0%   { color: #8a6200; }
   40%  { color: #8a6200; }
-  100% { color: #1f77b4; }
+  100% { color: var(--color-accent); }
 }
 `;
 if (typeof document !== 'undefined') {
@@ -403,7 +403,7 @@ const PriceChart = memo(function PriceChart({ selected, currency, yearWindow, is
 // F1: 정규화 비교 차트 (다중 자산 + 아파트)
 // normMonthsAgo: 오늘로부터 N개월 전을 100% 기준으로
 // ────────────────────────────────────────────
-const NormChart = memo(function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobile, aptX = [], aptAvg = [], aptName = null, showApt = true, onNormChange }) {
+const NormChart = memo(function NormChart({ selected, currency, yearWindow, normMonthsAgo = 36, isMobile, aptX = [], aptAvg = [], aptName = null, showApt = true, onNormChange, theme }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRefs     = useRef([]);
@@ -722,7 +722,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
     }));
 
     const series = chart.addSeries(LineSeries, {
-      color: SERIES_COLORS[0], //아파트 aptNm 실선 (L1 avgLine과 동일)
+      color: cssVar('--color-accent'),
       lineWidth: 2,
       lineStyle: 0, // dashed
       priceScaleId: 'right',
@@ -738,6 +738,14 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
     normalized.forEach(p => { monthMap[p.time.slice(0, 7)] = p.value; });
     aptMonthMapRef.current = monthMap;
   }, [aptX, aptAvg, yearWindow, normMonthsAgo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 테마 변경 시 아파트 시리즈 색 재적용
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      aptSeriesRef.current?.applyOptions({ color: cssVar('--color-accent') });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 아파트 시리즈 표시/숨김
   useEffect(() => {
@@ -808,7 +816,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
         <div style={{ position: 'absolute', top: 36, left: 8, background: 'rgba(31,29,27,0.88)', color: '#fff', borderRadius: 6, padding: '3px 7px', fontSize: '0.68rem', fontWeight: 600, pointerEvents: 'none', zIndex: 20, lineHeight: 1.6 }}>
           <div style={{ color: 'var(--color-text-disabled)', marginBottom: 2 }}>{tooltip.time}</div>
           {Object.entries(tooltip.vals).map(([k, v]) => {
-            const color = k === 'APT' ? SERIES_COLORS[0] : ASSET_MAP[k]?.color;
+            const color = k === 'APT' ? cssVar('--color-accent') : ASSET_MAP[k]?.color;
             const label = k === 'APT' ? (aptName || 'APT') : ASSET_MAP[k]?.label;
             return (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -816,7 +824,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
                   display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
                   background: color, flexShrink: 0,
                 }} />
-                <span style={{ color: color === '#0047AB' ? '#fff' : color }}>{label}</span>
+                <span style={{ color }}>{label}</span>
                 <span style={{ color: '#fff' }}>
                   {Math.round(Number(v))}%
                 </span>
@@ -838,7 +846,7 @@ const NormChart = memo(function NormChart({ selected, currency, yearWindow, norm
         })}
         {aptName && aptAvg.length > 0 && showApt && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-            <span style={{ width: 16, height: 2, background: SERIES_COLORS[0], display: 'inline-block', borderRadius: 2 }} />
+            <span style={{ width: 16, height: 2, background: 'var(--color-accent)', display: 'inline-block', borderRadius: 2 }} />
             {aptName}
           </span>
         )}
@@ -1020,11 +1028,11 @@ export default function FinanceChart({ isMobile = false, aptX = [], aptAvg = [],
                 >
                   <div style={{
                     width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                    background: showApt ? SERIES_COLORS[0] : 'var(--color-text-disabled)',
+                    background: showApt ? cssVar('--color-accent') : 'var(--color-text-disabled)',
                   }} />
                   <span style={{
                     fontSize: '0.72rem', fontWeight: showApt ? 700 : 400,
-                    color: showApt ? SERIES_COLORS[0] : 'var(--color-text-disabled)',
+                    color: showApt ? 'var(--color-accent)' : 'var(--color-text-disabled)',
                     animation: showApt ? 'aptNameHighlightText 2s ease-out forwards' : 'none',
                   }}>
                     {aptName}
@@ -1087,7 +1095,7 @@ export default function FinanceChart({ isMobile = false, aptX = [], aptAvg = [],
           </div>
         </div>
         {/* ── F1: 정규화 비교 ── */}
-        <NormChart selected={selected} currency={currency} yearWindow={yearWindow} normMonthsAgo={normMonthsAgo} isMobile={isMobile} aptX={aptX} aptAvg={aptAvg} aptName={aptName} showApt={showApt} onNormChange={(months) => { setNormMonthsAgo(months); if (months / 12 >= yearWindow) setYearWindow(Math.ceil(months / 12) + 1); }} />
+        <NormChart selected={selected} currency={currency} yearWindow={yearWindow} normMonthsAgo={normMonthsAgo} isMobile={isMobile} aptX={aptX} aptAvg={aptAvg} aptName={aptName} showApt={showApt} theme={theme} onNormChange={(months) => { setNormMonthsAgo(months); if (months / 12 >= yearWindow) setYearWindow(Math.ceil(months / 12) + 1); }} />
       </div>
 
       {/* ── F2: 금리 합산 / F3·F4: 일반 자산 개별 종가 ── */}

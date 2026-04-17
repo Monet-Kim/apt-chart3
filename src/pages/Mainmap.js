@@ -1,6 +1,5 @@
 // src/pages/Mainmap.js
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
-import { buildPNU as buildCadastralPNU, findRelatedPNUs } from '../utils/pnu';
 import { Map as KakaoMap, CustomOverlayMap } from 'react-kakao-maps-sdk';
 import { parseCSV } from '../styles/csvUtils';
 import { trimAptName } from '../styles/aptNameUtils';
@@ -41,6 +40,7 @@ const makeGridPoints = (bbox, n = 3) => {
 };
 
 // 포인트 → CSV 파일명 (역지오코딩 결과 캐시 우선)
+// 실패 결과는 캐시하지 않음 — 일시적 API 오류로 잘못된 파일이 영구 캐시되는 버그 방지
 const pointToFile = (pt) => {
   const cacheKey = `${pt.lat.toFixed(2)},${pt.lng.toFixed(2)}`;
   if (geocodeCache.has(cacheKey)) return Promise.resolve(geocodeCache.get(cacheKey));
@@ -50,7 +50,7 @@ const pointToFile = (pt) => {
     geocoder.coord2RegionCode(pt.lng, pt.lat, async (res, status) => {
       const fallback = `${R2_BASE}/KaptList/서울특별시_송파구_11710_list_coord.csv`;
       if (status !== window.kakao.maps.services.Status.OK || !res?.length) {
-        geocodeCache.set(cacheKey, fallback);
+        // 실패 시 캐시 없이 fallback 반환 → 다음 onIdle에서 재시도
         resolve(fallback);
         return;
       }
@@ -74,11 +74,20 @@ const loadFile = async (file) => {
   try {
     const res = await fetch(file, { cache: 'force-cache' });
     if (!res.ok) return [];
-    const rows = parseCSV(await res.text()).map(row => ({
-      ...row,
-      위도: parseFloat(row['위도']),
-      경도: parseFloat(row['경도']),
-    }));
+    const rows = parseCSV(await res.text()).map(row => {
+      const kakaoLat = parseFloat(row['위도']);
+      const kakaoLng = parseFloat(row['경도']);
+      const shpLat   = parseFloat(row['shp_lat']);
+      const shpLng   = parseFloat(row['shp_lng']);
+      const hasShp   = !isNaN(shpLat) && !isNaN(shpLng);
+      return {
+        ...row,
+        위도: hasShp ? shpLat : kakaoLat,
+        경도: hasShp ? shpLng : kakaoLng,
+        kakao_lat: kakaoLat,
+        kakao_lng: kakaoLng,
+      };
+    });
     fileCache.set(file, rows);
     return rows;
   } catch {
@@ -178,6 +187,32 @@ const SWITCH_THUMB = (active) => ({
   transition: 'left 0.2s',
   pointerEvents: 'none',
 });
+
+function PriceDots() {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, height: '1em' }}>
+      {[0, 1, 2].map(i => (
+        <span
+          key={i}
+          style={{
+            width: 4, height: 4,
+            borderRadius: '50%',
+            background: 'var(--map-accent)',
+            display: 'inline-block',
+            animation: 'priceDotBounce 1s ease-in-out infinite',
+            animationDelay: `${i * 0.18}s`,
+          }}
+        />
+      ))}
+      <style>{`
+        @keyframes priceDotBounce {
+          0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
+          40% { opacity: 1; transform: translateY(-3px); }
+        }
+      `}</style>
+    </span>
+  );
+}
 
 function FilterPanel({ filters, onChange, aptTypeOptions, onClose }) {
   const { saleNm, minHoCnt, minUsedate, aptNm, removeGhostApt } = filters;
@@ -330,6 +365,11 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
   const [loading, setLoading] = useState(false);
   // kaptKey → { area, price } 마커 가격 캐시
   const [markerPrices, setMarkerPrices] = useState(new Map());
+  // 가격 로딩 중인 kaptKey Set
+  const [loadingPriceKeys, setLoadingPriceKeys] = useState(new Set());
+  // 로드 완료했으나 6년 내 거래 없는 kaptKey Set
+  const [noPriceKeys, setNoPriceKeys] = useState(new Set());
+  const noPriceRef = useRef(new Set()); // 재시도 방지용 동기 참조
 
   // 필터 상태
   const [filterOpen, setFilterOpen] = useState(false);
@@ -346,9 +386,9 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
   const idleTimerRef = useRef(null);
   const priceDoneRef = useRef(new Set()); // 이미 계산 완료된 kaptKey
 
-  // 필지 경계 폴리곤 (복수 필지를 배열로 관리)
-  const SHPpolygonListRef  = useRef([]);   // kakao.maps.Polygon[]
-  const SHPpolygonCacheRef = useRef({});   // bjdCode → JSON index
+  // 필지 경계 폴리곤
+  const SHPpolygonListRef   = useRef([]);   // kakao.maps.Polygon[]
+  const KaptPolygonCacheRef = useRef({});   // bjdCode → KaptPolygon JSON
 
   useEffect(() => {
     const clearAll = () => {
@@ -357,20 +397,21 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
     };
     clearAll();
 
-    if (!selectedApt?.kaptAddr || !selectedApt?.bjdCode || !mapRef.current) return;
+    if (!selectedApt?.bjdCode || !mapRef.current) return;
 
-    const bjdCode = String(selectedApt.bjdCode).padStart(10, '0');
-    const pnu = buildCadastralPNU(selectedApt.kaptAddr, bjdCode);
-    if (!pnu) return;
+    const kakao = window.kakao;
+    if (!kakao?.maps?.Polygon) return;
 
-    const drawPolygon = (index) => {
-      const related = findRelatedPNUs(pnu, index);
-      if (!related.length) return;
-      const kakao = window.kakao;
-      if (!kakao?.maps?.Polygon) return;
+    const bjdCode  = String(selectedApt.bjdCode).padStart(10, '0');
+    const kaptCode = selectedApt.kaptCode;
 
-      related.forEach(p => {
-        const coords = index[p];
+    const draw = (kaptData) => {
+      const entry = kaptData?.[kaptCode];
+      if (!entry) return;
+      // polygons: 새 포맷 (배열의 배열), polygon: 구 포맷 (단일 배열) 모두 대응
+      const polyList = entry.polygons ?? (entry.polygon ? [entry.polygon] : null);
+      if (!polyList?.length) return;
+      polyList.forEach(coords => {
         if (!coords || coords.length < 3) return;
         const path = coords.map(([lat, lng]) => new kakao.maps.LatLng(lat, lng));
         const poly = new kakao.maps.Polygon({
@@ -386,17 +427,17 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       });
     };
 
-    if (SHPpolygonCacheRef.current[bjdCode]) {
-      drawPolygon(SHPpolygonCacheRef.current[bjdCode]);
+    const cached = KaptPolygonCacheRef.current[bjdCode];
+    if (cached !== undefined) {
+      draw(cached);
     } else {
-      fetch(`/SHPpolygon/${bjdCode}.json`)
+      fetch(`${R2_BASE}/KaptPolygon/${bjdCode}.json`)
         .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          if (!data) return;
-          SHPpolygonCacheRef.current[bjdCode] = data;
-          drawPolygon(data);
+        .then(d => {
+          KaptPolygonCacheRef.current[bjdCode] = d;
+          if (SHPpolygonListRef.current.length === 0) draw(d);
         })
-        .catch(() => {});
+        .catch(() => { KaptPolygonCacheRef.current[bjdCode] = null; });
     }
 
     return clearAll;
@@ -433,9 +474,11 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
   // 클릭한 마커 1개의 가격·면적을 온디맨드로 로드 (L1과 동일한 면적 선택 알고리즘)
   const loadSinglePrice = async (row) => {
     const key = `${row['kaptName']}_${row['bjdCode'] || ''}`;
-    if (priceDoneRef.current.has(key)) return;
+    if (priceDoneRef.current.has(key) || noPriceRef.current.has(key)) return;
     const code5 = String(row['bjdCode'] || '').slice(0, 5);
     if (!code5) return;
+    setLoadingPriceKeys(prev => { const s = new Set(prev); s.add(key); return s; });
+
     try {
       const as1 = row['as1'] || '', as2 = row['as2'] || '';
       const [rResult, pResult] = await Promise.allSettled([
@@ -448,12 +491,10 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       const { pnu } = buildPNU(row);
       if (!pnu) return;
 
-      // L1과 동일: pdWb 포함해서 면적 수집
       const rawAreas = listAreasForPnu(wb, pnu, row['kaptName'] || null, pdWb);
       const repAreas = groupAreasToRep(rawAreas);
       if (!repAreas.length) return;
 
-      // L1과 동일: 최근 3년 거래량 최다 면적 우선 선택
       const cutoff = (() => {
         const d = new Date();
         d.setFullYear(d.getFullYear() - 3);
@@ -503,9 +544,16 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       priceDoneRef.current.add(key);
       setMarkerPrices(prev => new Map([...prev, [key, { area, price: Math.round(lastPrice * 10) / 10 }]]));
     } catch { /* 워크북 없으면 무시 */ }
+    finally {
+      setLoadingPriceKeys(prev => { const s = new Set(prev); s.delete(key); return s; });
+      if (!priceDoneRef.current.has(key)) {
+        noPriceRef.current.add(key);
+        setNoPriceKeys(prev => { const s = new Set(prev); s.add(key); return s; });
+      }
+    }
   };
 
-  const onIdle = (map) => {
+  const onIdle = useCallback((map) => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(async () => {
       // 줌 레벨 8 이상은 마커 사용 안 함
@@ -518,22 +566,24 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
       const sw = b.getSouthWest(), ne = b.getNorthEast();
       const bbox = { south: sw.getLat(), west: sw.getLng(), north: ne.getLat(), east: ne.getLng() };
 
+      const currentLevel = map.getLevel();
       if (lastBBoxRef.current) {
+        const levelChanged = lastBBoxRef.current.level !== currentLevel;
         const movedEnough =
           Math.abs(bbox.south - lastBBoxRef.current.south) > 0.002 ||
           Math.abs(bbox.west  - lastBBoxRef.current.west ) > 0.002 ||
           Math.abs(bbox.north - lastBBoxRef.current.north) > 0.002 ||
           Math.abs(bbox.east  - lastBBoxRef.current.east ) > 0.002;
-        if (!movedEnough) return;
+        if (!levelChanged && !movedEnough) return;
       }
-      lastBBoxRef.current = bbox;
+      lastBBoxRef.current = { ...bbox, level: currentLevel };
 
       setLoading(true);
       try {
-        // 줌 레벨이 높을수록(광역) 그리드를 촘촘하게
-        const currentLevel = map.getLevel();
+        // 줌 레벨이 높을수록(광역) 그리드를 촘촘하게 + 중심점 항상 포함
         const gridN = currentLevel >= 7 ? 4 : currentLevel >= 5 ? 3 : 2;
-        const pts = makeGridPoints(bbox, gridN);
+        const centerPt = { lat: (bbox.south + bbox.north) / 2, lng: (bbox.west + bbox.east) / 2 };
+        const pts = [centerPt, ...makeGridPoints(bbox, gridN)];
         const files = Array.from(new Set(await Promise.all(pts.map(pointToFile))));
         const all = (await Promise.all(files.map(loadFile))).flat();
         // 뷰포트 밖 마커 제거 (약간의 여유를 두어 가장자리 마커 보존)
@@ -570,7 +620,7 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
         setLoading(false);
       }
     }, 200);
-  };
+  }, []); // 필터 상태는 filtersRef/aptTypeOptionsRef를 통해 최신값 유지
 
   // 필터 적용
   const filteredMarkers = useMemo(() => {
@@ -775,6 +825,8 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
           const pos = { lat: selectedApt['위도'], lng: selectedApt['경도'] };
           const isFav = favSet.has(aptKey);
           const info = markerPrices.get(aptKey);
+          const isPriceLoading = loadingPriceKeys.has(aptKey);
+          const isNoPrice = noPriceKeys.has(aptKey);
           const year = String(selectedApt['kaptUsedate'] || '').slice(0, 4);
           return (
             <CustomOverlayMap key="selected-popup" position={pos} yAnchor={1} xAnchor={0.5} clickable zIndex={25}>
@@ -801,12 +853,13 @@ function Mainmap({ mapCenter, setMapCenter, mapLevel, setMapLevel, onSelectApt, 
                     </span>
                   </div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--map-accent)', lineHeight: 1.2 }}>
-                    {info ? `${info.price}억` : '–'}
+                    {info ? `${info.price}억` : isPriceLoading ? <PriceDots /> : isNoPrice ? '6년 거래X' : '–'}
                   </div>
                   {(info || year) && (
                     <div style={{ display: 'flex', gap: 4, marginTop: 6, borderTop: '0.5px solid var(--map-accent-bg)', paddingTop: 6 }}>
-                      {info && <span style={{ fontSize: 10, background: 'var(--map-accent-bg)', color: 'var(--map-accent)', borderRadius: 4, padding: '2px 6px' }}>{info.area}㎡</span>}
                       {year && <span style={{ fontSize: 10, background: 'var(--map-accent-bg)', color: 'var(--map-accent)', borderRadius: 4, padding: '2px 6px' }}>{year}년</span>}
+                      {selectedApt['kaptdaCnt'] && <span style={{ fontSize: 10, background: 'var(--map-accent-bg)', color: 'var(--map-accent)', borderRadius: 4, padding: '2px 6px' }}>{Math.floor(selectedApt['kaptdaCnt'])}세대</span>}
+                      {info && <span style={{ fontSize: 10, background: 'var(--map-accent-bg)', color: 'var(--map-accent)', borderRadius: 4, padding: '2px 6px' }}>{info.area}㎡</span>}
                     </div>
                   )}
                 </div>

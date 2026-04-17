@@ -95,9 +95,6 @@ export function buildAptInfoPairs(listRow, detailRow, { includeAddress = true } 
   })();
 
   const pairs = [
-    ['주소(지번)',   stripAptName(L('kaptAddr'), L('kaptName'))],
-    ['주소(도로명)', stripAptName(L('doroJuso'), L('kaptName'))],
-    ['우편번호',     L('zipcode')],
     ['사용승인일',   fmtDate(L('kaptUsedate')) ? fmtDate(L('kaptUsedate')) + ageStr(L('kaptUsedate')) : null],
     ['건물유형',     L('codeAptNm')],
     ['세대수',       L('kaptdaCnt') ? `${String(L('kaptdaCnt')).replace(/\.0+$/, '')}세대` : null],
@@ -110,7 +107,10 @@ export function buildAptInfoPairs(listRow, detailRow, { includeAddress = true } 
     ['구조',         L('codeHallNm')],
     ['CCTV수',       CCTV수],
     ['전기차충전기', 전기차충전기],
-    ['단지면적',     fmtArea(L('kaptTarea'))],
+    ['주소(지번)',   stripAptName(L('kaptAddr'), L('kaptName'))],
+    ['주소(도로명)', stripAptName(L('doroJuso'), L('kaptName'))],
+    ['우편번호',     L('zipcode')],
+    ['연면적',       fmtArea(L('kaptTarea'))],
     ['동 수',        L('kaptDongCnt') ? `${L('kaptDongCnt')}동` : null],
     ['최고층',       L('kaptTopFloor') ? `${L('kaptTopFloor')}층` : null],
     ['지하층',       L('kaptBaseFloor') ? `${L('kaptBaseFloor')}층` : null],

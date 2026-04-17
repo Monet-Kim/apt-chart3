@@ -52,7 +52,7 @@ const properties = data?.profile?.properties || {};
             </svg>
           </span>
         )}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#fff', flex: 1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1.25rem', color: '#fff', flex: 1 }}>
           {user ? '내 계정' : '로그인'}
         </span>
       </div>

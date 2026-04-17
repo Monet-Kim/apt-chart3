@@ -1,6 +1,6 @@
 // 전체 LWC 차트 공통 높이 계산
 export const getChartHeight = (isMobile, width) =>
-  Math.round(width * (2 / 3));
+  Math.min(Math.round(width * (2 / 3)), 400);
 
 // 전체 LWC 차트 공통 폭 비율 (패널 너비 대비)
 export const CHART_WIDTH_RATIO = 0.85;

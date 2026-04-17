@@ -14,9 +14,9 @@ const FAV_CHIP_STYLE = `
     100% { opacity: 1; transform: scale(1); }
   }
   @keyframes fav-ring {
-    0%   { border-color: #f5c518; box-shadow: 0 0 0 0px rgba(245,197,24,.65); }
-    45%  { border-color: #f5c518; box-shadow: 0 0 0 5px rgba(245,197,24,.13); }
-    100% { box-shadow: 0 0 0 0px rgba(245,197,24,0); }
+    0%   { box-shadow: 0 0 0 0px  rgba(245,197,24,.70); border-color: #f5c518; }
+    30%  { box-shadow: 0 0 0 6px  rgba(245,197,24,.30); border-color: #f5c518; }
+    100% { box-shadow: 0 0 0 10px rgba(245,197,24,.00); border-color: #f5c518; }
   }
   @keyframes fav-out-clip {
     0%   { clip-path: inset(0 0 0 0%   round 20px); opacity: 1; }
@@ -29,7 +29,7 @@ const FAV_CHIP_STYLE = `
   .fav-chip-enter {
     animation:
       fav-pop  .12s cubic-bezier(.34, 1.5, .64, 1) forwards,
-      fav-ring .18s ease .12s forwards;
+      fav-ring .55s ease-out .10s forwards;
     will-change: transform, opacity;
   }
   .fav-chip-exit {
@@ -58,12 +58,12 @@ export function PickButton({ isFav, onClick }) {
     <button
       onClick={onClick}
       style={{
-        display: 'flex', alignItems: 'center', gap: 2,
-        border: `1.5px solid ${isFav ? '#f5c518' : 'rgba(255,255,255,0.55)'}`,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0,
+        border: isFav ? '3px solid #f5c518' : '2px solid rgba(255,255,255,0.55)',
         borderRadius: 20, background: 'none', cursor: 'pointer',
-        padding: '2px 7px', height: 24,
-        fontSize: '0.65rem', fontWeight: 700,
-        color: '#fff', letterSpacing: '0.01em',
+        padding: '2px 8px',
+        fontSize: '0.5rem', fontWeight: 600,
+        color: '#fff', letterSpacing: '0.1em', lineHeight: 1.1,
       }}
     >
       <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
@@ -99,7 +99,7 @@ export function PickButton({ isFav, onClick }) {
      onSelect   — 칩 클릭 시 (fav) => void
      onRemove   — ✕ 클릭 시 (key) => void
 ──────────────────────────────────────────── */
-export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove }) {
+export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove, flashAll = false, maxChars }) {
   const [page, setPage] = useState(0);
   const [containerW, setContainerW] = useState(
     () => Math.max((typeof window !== 'undefined' ? window.innerWidth : 390) - 20, 200)
@@ -120,27 +120,25 @@ export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove })
   useEffect(() => { setPage(0); }, [favApts.length]);
 
   const GAP = 6;
-  const NAV_W = 34; // "★N" 버튼: 6+6px padding + 2+2px border + ★+숫자 ≈ 34px
+  const NAV_W = 28; // 숫자 버튼: 고정 28px 원형
 
   // 칩 너비 추정: 8+8px padding + 2+2px border + 5px gap + ~8px ✕ + 글자(11px/char)
   function chipW(fav) {
-    return trimAptName(fav.kaptName).length * 11 + 33;
+    const name = trimAptName(fav.kaptName);
+    const len = maxChars ? Math.min(name.length, maxChars) : name.length;
+    return len * 11 + 33;
   }
 
-  // startIdx부터 2줄에 들어가는 칩 개수 계산
+  // startIdx부터 1줄에 들어가는 칩 개수 계산
   // hasNavBefore: 앞에 ★+N 버튼이 있으면 그 너비 선점
   function calcFit(startIdx, hasNavBefore) {
     let x = hasNavBefore ? NAV_W + GAP : 0;
-    let row = 1;
     let count = 0;
     for (let i = startIdx; i < favApts.length; i++) {
       const w = chipW(favApts[i]);
       const gapBefore = x > 0 ? GAP : 0;
-      if (x + gapBefore + w > containerW) {
-        if (row >= 2) break;
-        row++; x = 0;
-      }
-      x += (x > 0 ? GAP : 0) + w;
+      if (x + gapBefore + w > containerW) break;
+      x += gapBefore + w;
       count++;
     }
     // 다음 페이지가 있으면 맨 끝에 ★+N이 들어갈 공간을 1회만 확인
@@ -170,19 +168,30 @@ export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove })
   const hiddenBefore = start;
   const hiddenAfter = favApts.length - (start + count);
 
+  const selectedIdx = selectedApt
+    ? favApts.findIndex(f => f.kaptCode === selectedApt.kaptCode)
+    : -1;
+  const selectedInBefore = selectedIdx >= 0 && selectedIdx < start;
+  const selectedInAfter = selectedIdx >= 0 && selectedIdx >= start + count;
+
   const navStyle = {
-    display: 'flex', alignItems: 'center',
-    padding: '4px 6px', borderRadius: 20, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 28, height: 28, padding: 0, borderRadius: '50%', cursor: 'pointer',
     background: 'var(--color-surface-2)',
     border: `2px solid ${ACCENT_ALPHA[theme]?.a35 ?? 'rgba(0,0,0,0.2)'}`,
-    fontSize: '0.7rem', fontWeight: 700,
-    color: 'var(--color-text-faint)', whiteSpace: 'nowrap', flexShrink: 0,
+    fontSize: '0.75rem', fontWeight: 800,
+    color: 'var(--color-text-faint)', flexShrink: 0, boxSizing: 'border-box',
+  };
+  const navActiveStyle = {
+    ...navStyle,
+    border: '3px solid #f5c518',
+    color: '#f5c518',
   };
 
   return (
-    <div ref={wrapRef} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: GAP, flexWrap: 'wrap' }}>
+    <div ref={wrapRef} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: GAP, flexWrap: 'nowrap', overflowX: 'clip', overflowY: 'visible' }}>
       {hiddenBefore > 0 && (
-        <div style={navStyle} onClick={() => setPage(safePage - 1)}>★{hiddenBefore}</div>
+        <div style={selectedInBefore ? navActiveStyle : navStyle} onClick={() => setPage(safePage - 1)}>{hiddenBefore}</div>
       )}
       {visibleFavs.map(fav => (
         <FavChip
@@ -190,12 +199,14 @@ export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove })
           fav={fav}
           isActive={selectedApt?.kaptCode === fav.kaptCode}
           theme={theme}
+          forceEnter={flashAll}
+          maxChars={maxChars}
           onClick={() => onSelect(fav)}
           onRemove={onRemove}
         />
       ))}
       {hiddenAfter > 0 && (
-        <div style={navStyle} onClick={() => setPage(safePage + 1)}>★{hiddenAfter}</div>
+        <div style={selectedInAfter ? navActiveStyle : navStyle} onClick={() => setPage(safePage + 1)}>{hiddenAfter}</div>
       )}
     </div>
   );
@@ -208,22 +219,29 @@ export function FavChipGrid({ favApts, selectedApt, theme, onSelect, onRemove })
      'idle'  → 일반 상태
      'exit'  → ✕ 클릭 시 왼쪽부터 언래블 후 onRemove 호출
 ──────────────────────────────────────────── */
-export function FavChip({ fav, isActive, theme, onClick, onRemove }) {
+export function FavChip({ fav, isActive, theme, onClick, onRemove, forceEnter = false, maxChars }) {
   const [phase, setPhase] = useState('enter');
   const prevIsActiveRef = useRef(isActive);
 
   // 마운트 → enter 애니메이션 종료 후 idle로 전환
-  // fav-pop(.12s) + fav-ring(.12s delay + .18s) = 총 0.3s
   useEffect(() => {
     const t = setTimeout(() => setPhase('idle'), 310);
     return () => clearTimeout(t);
   }, []);
 
+  // 지도탭 진입 시 일괄 flash
+  useEffect(() => {
+    if (!forceEnter) return;
+    setPhase(p => p === 'exit' ? p : 'enter');
+    const t = setTimeout(() => setPhase(p => p === 'exit' ? p : 'idle'), 310);
+    return () => clearTimeout(t);
+  }, [forceEnter]);
+
   // 선택(isActive: false→true) 시 enter 애니메이션 재생
   useEffect(() => {
     const prev = prevIsActiveRef.current;
     prevIsActiveRef.current = isActive;
-    if (!isActive || prev) return; // 새로 active된 경우만
+    if (!isActive || prev) return;
     setPhase(p => p === 'exit' ? p : 'enter');
     const t = setTimeout(() => setPhase(p => p === 'exit' ? p : 'idle'), 310);
     return () => clearTimeout(t);
@@ -241,30 +259,44 @@ export function FavChip({ fav, isActive, theme, onClick, onRemove }) {
     phase === 'enter' ? 'fav-chip-enter' :
     phase === 'exit'  ? 'fav-chip-exit'  : '';
 
+  const flashing = forceEnter && phase === 'enter';
+
   return (
     <div
       key={fav.key}
       onClick={phase === 'exit' ? undefined : onClick}
       className={animClass}
       style={{
-        display: 'flex', alignItems: 'center', gap: 5,
+        position: 'relative',
+        display: 'flex', alignItems: 'center',
         padding: '4px 8px', cursor: phase === 'exit' ? 'default' : 'pointer',
         borderRadius: 20,
-        background: isActive ? 'var(--color-surface-2)' : COMPLEMENT_ALPHA[theme].a20,
+        background: (isActive || flashing) ? 'var(--color-surface-2)' : COMPLEMENT_ALPHA[theme].a20,
         border: isActive ? '3px solid #f5c518' : `2px solid ${ACCENT_ALPHA[theme].a35}`,
       }}
     >
       <span style={{
-        fontSize: '0.7rem', fontWeight: 800,
-        color: isActive ? 'var(--color-text-main)' : 'var(--color-text-faint)',
+        fontSize: '0.75rem', fontWeight: 800, letterSpacing: '0.02em',
+        color: (isActive || flashing) ? 'var(--color-text-main)' : 'var(--color-text-faint)',
         whiteSpace: 'nowrap',
       }}>
-        {trimAptName(fav.kaptName)}
+        {(() => {
+          const name = trimAptName(fav.kaptName);
+          if (!maxChars || name.length <= maxChars) return name;
+          return <>{name.slice(0, maxChars - 1)}<span style={{ opacity: 0.7 }}>{name[maxChars - 1]}</span></>;
+        })()}
       </span>
       <span
         onClick={handleRemove}
-        style={{ fontSize: '0.6rem', color: 'var(--color-text-disabled)', cursor: 'pointer', lineHeight: 1 }}
         title="즐겨찾기 삭제"
+        style={{
+          position: 'absolute', top: -3, right: -3,
+          width: 13, height: 13, borderRadius: '50%',
+          background: isActive ? '#f5c518' : ACCENT_ALPHA[theme].a35,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', fontSize: '0.5rem', color: (isActive || flashing) ? 'var(--color-text-main)' : 'var(--color-text-faint)', fontWeight: 900,
+          lineHeight: 1,
+        }}
       >✕</span>
     </div>
   );
