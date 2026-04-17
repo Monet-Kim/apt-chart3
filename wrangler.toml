@@ -1,0 +1,13 @@
+name = "apt-chart-api"
+main = "workers/api/index.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "apt-chart-data"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "apt-chart-board"
+database_id = "d65fb1f3-f00b-4863-9c65-cffb9bf04bed"

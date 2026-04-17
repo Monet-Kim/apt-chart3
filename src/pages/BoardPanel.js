@@ -2,6 +2,28 @@ import { useState, useEffect, useRef } from 'react';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
 import RichTextEditor, { isEditorEmpty } from '../components/RichTextEditor';
 
+const API_BASE = 'https://apt-chart-api.kyungminkor.workers.dev';
+
+function normalizePost(p) {
+  let contentHtml = p.content || '';
+  let chartMeta = null;
+  const m = contentHtml.match(/<!--chartmeta:([A-Za-z0-9+/=]+)-->/);
+  if (m) {
+    try { chartMeta = JSON.parse(atob(m[1])); } catch {}
+    contentHtml = contentHtml.replace(/<!--chartmeta:[A-Za-z0-9+/=]+-->/, '');
+  }
+  return {
+    id: p.id,
+    kakao_id: p.kakao_id,
+    author: p.nickname,
+    title: p.title,
+    contentHtml,
+    chartMeta,
+    time: new Date(p.created_at).toISOString(),
+    views: 0,
+  };
+}
+
 /* ── 공통 버튼/입력 스타일 ── */
 
 const btnSecondary = {
@@ -106,9 +128,21 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
   const [page, setPage]               = useState(1);
   const [topPosts, setTopPosts]       = useState([]);
 
+  const [total, setTotal] = useState(0);
   const postsPerPage  = 20;
-  const totalPages    = Math.ceil(posts.length / postsPerPage);
-  const currentPosts  = posts.slice((page - 1) * postsPerPage, page * postsPerPage);
+  const totalPages    = Math.ceil(total / postsPerPage);
+  const currentPosts  = posts;
+
+  const loadPosts = async (p = 1) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/posts?page=${p}&limit=${postsPerPage}`);
+      const data = await res.json();
+      const normalized = (data.posts || []).map(normalizePost);
+      setPosts(normalized);
+      setTotal(data.total || 0);
+      setTopPosts([...normalized].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5));
+    } catch {}
+  };
 
   useEffect(() => { onWritingStateChange?.(showForm); }, [showForm]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -121,19 +155,11 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
     };
   }, [backHandlerRef, selectedPost, showForm]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('board-posts');
-    if (saved) {
-      const arr = JSON.parse(saved);
-      setPosts(arr);
-      setTopPosts([...arr].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5));
-    }
-  }, []);
+  useEffect(() => { loadPosts(1); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const savePosts = (arr) => {
-    setPosts(arr);
-    setTopPosts([...arr].sort((a, b) => (b.views || 0) - (a.views || 0)).slice(0, 5));
-    localStorage.setItem('board-posts', JSON.stringify(arr));
+  const handlePageChange = (p) => {
+    setPage(p);
+    loadPosts(p);
   };
 
   const resetForm = () => {
@@ -171,48 +197,77 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
     onPendingPostConsumed?.();
   }, [pendingPostContent]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handlePost = (e) => {
+  const handlePost = async (e) => {
     e.preventDefault();
-    if (!author.trim() || !title.trim()) return;
+    if (!user?.id || !author.trim() || !title.trim()) return;
     if (isEditorEmpty(textContent) && !chartAttachRef.current) return;
 
-    // 최종 HTML: 차트 이미지(있으면) + 텍스트
     const textHtml = isEditorEmpty(textContent) ? '' : textContent;
-    const finalHtml = (chartAttachRef.current || '') + textHtml;
+    const metaSuffix = pendingPostMetaRef.current
+      ? `<!--chartmeta:${btoa(JSON.stringify(pendingPostMetaRef.current))}-->`
+      : '';
+    const finalContent = (chartAttachRef.current || '') + textHtml + metaSuffix;
 
-    const isEdit = Boolean(editingPostId);
-    const editingPost = isEdit ? posts.find(p => p.id === editingPostId) : null;
-    const newPost = {
-      id:          isEdit ? editingPostId : Date.now(),
-      author:      author.trim(),
-      title:       title.trim(),
-      contentHtml: finalHtml,
-      time:        isEdit && editingPost ? editingPost.time : new Date().toISOString(),
-      views:       isEdit && editingPost ? editingPost.views : 0,
-      likes:       isEdit && editingPost ? editingPost.likes : 0,
-      chartMeta:   isEdit ? (editingPost?.chartMeta ?? null) : (pendingPostMetaRef.current ?? null),
-    };
-    const arr = isEdit
-      ? posts.map(p => p.id === editingPostId ? newPost : p)
-      : [newPost, ...posts];
-    savePosts(arr);
+    if (editingPostId) {
+      const res = await fetch(`${API_BASE}/api/posts/${editingPostId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kakao_id: String(user.id), title: title.trim(), content: finalContent }),
+      });
+      if (res.ok) {
+        setPosts(prev => prev.map(p => p.id === editingPostId
+          ? { ...p, title: title.trim(), contentHtml: (chartAttachRef.current || '') + textHtml, time: new Date().toISOString() }
+          : p
+        ));
+      }
+    } else {
+      const res = await fetch(`${API_BASE}/api/posts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kakao_id: String(user.id), nickname: author.trim(), title: title.trim(), content: finalContent }),
+      });
+      if (res.ok) {
+        const { id, created_at } = await res.json();
+        const newPost = {
+          id, kakao_id: String(user.id), author: author.trim(),
+          title: title.trim(), contentHtml: (chartAttachRef.current || '') + textHtml,
+          chartMeta: pendingPostMetaRef.current ?? null,
+          time: new Date(created_at).toISOString(), views: 0,
+        };
+        setPosts(prev => [newPost, ...prev]);
+        setTotal(t => t + 1);
+      }
+    }
     localStorage.removeItem('board-draft');
     resetForm();
   };
 
-  const handleShowDetail = (post) => {
-    const idx = posts.findIndex(p => p.id === post.id);
-    if (idx !== -1) {
-      const arr = [...posts];
-      arr[idx].views = (arr[idx].views || 0) + 1;
-      savePosts(arr);
-      setSelectedPost({ ...arr[idx] });
-    }
+  const handleShowDetail = async (post) => {
+    // 목록에서 content가 없으므로 상세 API 호출
+    try {
+      const res = await fetch(`${API_BASE}/api/posts/${post.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        const normalized = normalizePost(data);
+        normalized.views = (post.views || 0) + 1;
+        setPosts(prev => prev.map(p => p.id === post.id ? { ...p, views: normalized.views } : p));
+        setSelectedPost(normalized);
+        return;
+      }
+    } catch {}
+    setSelectedPost({ ...post, views: (post.views || 0) + 1 });
   };
 
-  const handleDeletePost = () => {
-    if (window.confirm('정말 삭제하시겠습니까?')) {
-      savePosts(posts.filter(p => p.id !== selectedPost.id));
+  const handleDeletePost = async () => {
+    if (!user?.id || !window.confirm('정말 삭제하시겠습니까?')) return;
+    const res = await fetch(`${API_BASE}/api/posts/${selectedPost.id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kakao_id: String(user.id) }),
+    });
+    if (res.ok) {
+      setPosts(prev => prev.filter(p => p.id !== selectedPost.id));
+      setTotal(t => t - 1);
       setSelectedPost(null);
     }
   };
@@ -239,8 +294,10 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
           <IconChevron /> 목록
         </button>
         <span style={{ flex: 1 }} />
-        <button onClick={handleEditPost}   style={{ ...btnSecondary, color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }}><IconEdit /></button>
-        <button onClick={handleDeletePost} style={{ ...btnSecondary, color: '#FFAAAA', borderColor: 'rgba(255,170,170,0.4)' }}><IconTrash /></button>
+        {selectedPost.kakao_id === String(user?.id) && (<>
+          <button onClick={handleEditPost}   style={{ ...btnSecondary, color: '#fff', borderColor: 'rgba(255,255,255,0.4)' }}><IconEdit /></button>
+          <button onClick={handleDeletePost} style={{ ...btnSecondary, color: '#FFAAAA', borderColor: 'rgba(255,170,170,0.4)' }}><IconTrash /></button>
+        </>)}
       </div>
 
       {/* 제목 — 위 */}
@@ -395,7 +452,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
         ) : (
           <span style={{ color: 'rgba(255,255,255,0.8)', flexShrink: 0 }}><IconBoard /></span>
         )}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#fff', flex: 1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1.25rem', color: '#fff', flex: 1 }}>
           게시판
         </span>
         {user ? (
@@ -435,7 +492,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
 
         {/* 전체 글 라벨 */}
         <div style={{ padding: '10px 16px 4px', fontSize: '0.72rem', fontWeight: 700, color: 'var(--color-text-faint)', letterSpacing: '0.05em', textAlign: 'left' }}>
-          전체 글 <span style={{ color: 'var(--color-text-sub)', fontWeight: 800 }}>{posts.length}</span>
+          전체 글 <span style={{ color: 'var(--color-text-sub)', fontWeight: 800 }}>{total}</span>
         </div>
 
         {/* 전체 글 목록 — 콤팩트 썸네일형 */}
@@ -482,20 +539,20 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
         {/* 페이지네이션 */}
         {totalPages > 1 && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 4, padding: '0 16px 20px', flexWrap: 'wrap' }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+            <button onClick={() => handlePageChange(Math.max(1, page - 1))} disabled={page === 1}
               style={{ ...btnSecondary, height: 32, padding: '0 10px', opacity: page === 1 ? 0.4 : 1 }}>
               <IconBack />
             </button>
             {[...Array(Math.min(totalPages, 10)).keys()].map(i => {
               const pn = i + 1;
               return (
-                <button key={pn} onClick={() => setPage(pn)}
+                <button key={pn} onClick={() => handlePageChange(pn)}
                   style={{ width: 32, height: 32, border: page === pn ? 'none' : '1.5px solid var(--color-border)', borderRadius: 8, background: page === pn ? 'var(--color-text-sub)' : 'var(--color-surface)', color: page === pn ? '#fff' : 'var(--color-text-sub)', fontWeight: page === pn ? 700 : 400, cursor: 'pointer', fontSize: '0.85rem' }}>
                   {pn}
                 </button>
               );
             })}
-            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+            <button onClick={() => handlePageChange(Math.min(totalPages, page + 1))} disabled={page === totalPages}
               style={{ ...btnSecondary, height: 32, padding: '0 10px', opacity: page === totalPages ? 0.4 : 1, transform: 'rotate(180deg)' }}>
               <IconBack />
             </button>
