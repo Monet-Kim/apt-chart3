@@ -9,7 +9,7 @@ function normalizePost(p) {
   let chartMeta = null;
   const m = contentHtml.match(/<!--chartmeta:([A-Za-z0-9+/=]+)-->/);
   if (m) {
-    try { chartMeta = JSON.parse(atob(m[1])); } catch {}
+    try { chartMeta = JSON.parse(decodeURIComponent(escape(atob(m[1])))); } catch {}
     contentHtml = contentHtml.replace(/<!--chartmeta:[A-Za-z0-9+/=]+-->/, '');
   }
   return {
@@ -204,7 +204,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
 
     const textHtml = isEditorEmpty(textContent) ? '' : textContent;
     const metaSuffix = pendingPostMetaRef.current
-      ? `<!--chartmeta:${btoa(JSON.stringify(pendingPostMetaRef.current))}-->`
+      ? `<!--chartmeta:${btoa(unescape(encodeURIComponent(JSON.stringify(pendingPostMetaRef.current))))}-->`
       : '';
     const finalContent = (chartAttachRef.current || '') + textHtml + metaSuffix;
 
