@@ -1,0 +1,36 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="everything">
+      <rect x="10" y="10" width="492" height="492" rx="100"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#everything)">
+    <rect x="0" y="0" width="512" height="512" fill="#6A9470"/>
+
+    <polygon
+      points="256,180 306,340 476,340 344,432 394,592 256,500 118,592 168,432 36,340 206,340"
+      fill="#FFD700"/>
+
+    <text x="56" y="260"
+      font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
+      font-size="148" font-weight="900"
+      fill="#ffffff" stroke="#ffffff" stroke-width="6" stroke-linejoin="round"
+      text-anchor="start">단</text>
+
+    <text x="456" y="260"
+      font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
+      font-size="148" font-weight="900"
+      fill="#ffffff" stroke="#ffffff" stroke-width="6" stroke-linejoin="round"
+      text-anchor="end">지</text>
+
+    <line x1="96" y1="310" x2="416" y2="310" stroke="#ffffff" stroke-width="1.5" opacity="0.5"/>
+
+    <text x="256" y="390"
+      font-family="'Helvetica Neue','Arial',sans-serif"
+      font-size="52" font-weight="800"
+      fill="#ffffff" text-anchor="middle" letter-spacing="20">PICK</text>
+  </g>
+
+  <rect x="10" y="10" width="492" height="492" rx="100" fill="none" stroke="#FFD700" stroke-width="4"/>
+</svg>
