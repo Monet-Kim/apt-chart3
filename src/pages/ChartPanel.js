@@ -104,11 +104,19 @@ function toTime(ym) {
   return ym.length === 7 ? `${ym}-01` : ym;
 }
 
+// idx === 0 은 '--color-accent' (테마 연동), 나머지는 SERIES_COLORS 순환
+function seriesColor(idx) {
+  return idx === 0 ? cssVar('--color-accent') : SERIES_COLORS[idx % SERIES_COLORS.length];
+}
+function seriesColorCSS(idx) {
+  return idx === 0 ? 'var(--color-accent)' : SERIES_COLORS[idx % SERIES_COLORS.length];
+}
+
 // ────────────────────────────────────────────
 // G1: 다중 시리즈 평균가 라인 + 실거래/입주권 dot
 // LeftPanel AptTradeChart를 다중 시리즈로 확장
 // ────────────────────────────────────────────
-function MultiSeriesTradeChart({ series, isMobile }) {
+function MultiSeriesTradeChart({ series, isMobile, theme }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRefsMap = useRef({}); // id -> avgSeriesRef
@@ -139,13 +147,13 @@ function MultiSeriesTradeChart({ series, isMobile }) {
     svg.setAttribute('height', chartHeight);
 
     const visibleRange = chart.timeScale().getVisibleRange();
+    if (!visibleRange) return;
 
     seriesRef.current.forEach((s, idx) => {
       const avgSeries = seriesRefsMap.current[s.id];
       if (!avgSeries) return;
 
-      const color = SERIES_COLORS[idx % SERIES_COLORS.length];
-      // 40% 불투명 fill
+      const color = seriesColor(idx);
       const fillColor = color + '66';
 
       const drawDots = (xs, ys, shape) => {
@@ -250,7 +258,7 @@ function MultiSeriesTradeChart({ series, isMobile }) {
 
     // 추가/갱신
     series.forEach((s, idx) => {
-      const color = SERIES_COLORS[idx % SERIES_COLORS.length];
+      const color = seriesColor(idx);
 
       if (!seriesRefsMap.current[s.id]) {
         // 새 시리즈 생성
@@ -296,6 +304,17 @@ function MultiSeriesTradeChart({ series, isMobile }) {
     });
   }, [series]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 테마 변경 시 첫 번째 시리즈(accent) 색 재적용
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const firstId = seriesRef.current[0]?.id;
+      if (firstId && seriesRefsMap.current[firstId]) {
+        seriesRefsMap.current[firstId].applyOptions({ color: cssVar('--color-accent') });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div style={{ width: `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
     <div style={{ position: 'relative', width: '100%', height: chartHeight, border: '1px solid var(--color-border)', borderRadius: 0, overflow: 'hidden' }}>
@@ -324,9 +343,9 @@ function MultiSeriesTradeChart({ series, isMobile }) {
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{
                   display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-                  background: SERIES_COLORS[idx % SERIES_COLORS.length], flexShrink: 0,
+                  background: seriesColorCSS(idx), flexShrink: 0,
                 }} />
-                <span style={{ color: SERIES_COLORS[idx % SERIES_COLORS.length] === '#0047AB' ? '#fff' : SERIES_COLORS[idx % SERIES_COLORS.length] }}>
+                <span style={{ color: seriesColorCSS(idx) }}>
                   {trimAptName(s.kaptName)} {s.area}㎡
                 </span>
                 <span style={{ color: '#fff' }}>
@@ -343,7 +362,7 @@ function MultiSeriesTradeChart({ series, isMobile }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
         {series.map((s, idx) => (
           <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-            <span style={{ width: 16, height: 2, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2 }} />
+            <span style={{ width: 16, height: 2, background: seriesColorCSS(idx), display: 'inline-block', borderRadius: 2 }} />
             {trimAptName(s.kaptName)} {s.area}㎡
           </span>
         ))}
@@ -359,7 +378,7 @@ function MultiSeriesTradeChart({ series, isMobile }) {
 // normSeries: [{ id, kaptName, area, color, x (YM[]), y (억[]) }]
 // normMonthsAgo: 오늘로부터 N개월 전을 100% 기준
 // ────────────────────────────────────────────
-function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
+function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange, theme }) {
   const containerRef  = useRef(null);
   const chartRef      = useRef(null);
   const seriesRefsMap = useRef({}); // id -> lwc series
@@ -531,7 +550,7 @@ function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
         value: Math.round((p.value / baseValue) * 10000) / 100,
       }));
 
-      const color = SERIES_COLORS[idx % SERIES_COLORS.length];
+      const color = seriesColor(idx);
       const lwcSeries = chart.addSeries(LineSeries, {
         color,
         lineWidth: 2,
@@ -562,6 +581,17 @@ function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
       updateBaseLineX();
     });
   }, [series, normMonthsAgo, baseDateStr, updateBaseLineX]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 테마 변경 시 첫 번째 시리즈(accent) 색 재적용
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const firstId = seriesDataRef.current[0]?.id;
+      if (firstId && seriesRefsMap.current[firstId]) {
+        seriesRefsMap.current[firstId].applyOptions({ color: cssVar('--color-accent') });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ width: `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
@@ -632,9 +662,9 @@ function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{
                   display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-                  background: SERIES_COLORS[idx % SERIES_COLORS.length], flexShrink: 0,
+                  background: seriesColorCSS(idx), flexShrink: 0,
                 }} />
-                <span style={{ color: SERIES_COLORS[idx % SERIES_COLORS.length] === '#0047AB' ? '#fff' : SERIES_COLORS[idx % SERIES_COLORS.length] }}>
+                <span style={{ color: seriesColorCSS(idx) }}>
                   {trimAptName(s.kaptName)} {s.area}㎡
                 </span>
                 <span style={{ color: '#fff' }}>
@@ -651,7 +681,7 @@ function NormCompareChart({ series, normMonthsAgo, isMobile, onNormChange }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
         {series.map((s, idx) => (
           <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-            <span style={{ width: 16, height: 2, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: 2 }} />
+            <span style={{ width: 16, height: 2, background: seriesColorCSS(idx), display: 'inline-block', borderRadius: 2 }} />
             {trimAptName(s.kaptName)} {s.area}㎡
           </span>
         ))}
@@ -1031,7 +1061,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
             </svg>
           </span>
         )}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1rem', color: '#fff', flex: 1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: '1.25rem', color: '#fff', flex: 1 }}>
           단지 비교
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -1120,7 +1150,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
       </div>
 
 {/* ── 콘텐츠 영역 ── */}
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14, padding, boxSizing: 'border-box', ...((isMobile || isTablet) && { paddingBottom: isMobile ? 34 : 36 }) }}>
+      <div style={{ flex: 1, overflowY: 'auto', scrollbarGutter: 'stable', display: 'flex', flexDirection: 'column', gap: 14, padding, boxSizing: 'border-box', ...((isMobile || isTablet) && { paddingBottom: isMobile ? 34 : 36 }) }}>
 
       {/* ── 즐겨찾기 단지 목록 + 면적 선택 ── */}
       {favApts.length > 0 ? (
@@ -1221,7 +1251,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', alignItems: 'center', flex: 1 }}>
             {series.map((s, idx) => (
               <div key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-                <span style={{ width: 8, height: 8, background: SERIES_COLORS[idx % SERIES_COLORS.length], display: 'inline-block', borderRadius: '50%', flexShrink: 0 }} />
+                <span style={{ width: 8, height: 8, background: seriesColorCSS(idx), display: 'inline-block', borderRadius: '50%', flexShrink: 0 }} />
                 <span>{trimAptName(s.kaptName)} {s.area}㎡</span>
                 <button onClick={() => setSeries(prev => prev.filter(x => x.id !== s.id))}
                   style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--color-text-disabled)', lineHeight: 1, padding: 0, fontSize: '0.6rem' }}
@@ -1275,7 +1305,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
         </div>
 
         {series.length > 0 ? (
-          <NormCompareChart series={series} normMonthsAgo={normMonthsAgo} isMobile={isMobile} onNormChange={(months) => setNormMonthsAgo(Math.max(0, months))} />
+          <NormCompareChart series={series} normMonthsAgo={normMonthsAgo} isMobile={isMobile} theme={theme} onNormChange={(months) => setNormMonthsAgo(Math.max(0, months))} />
         ) : (
           <div style={{ height: getChartHeight(isMobile, window.innerWidth), display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg)', borderRadius: 8, color: 'var(--color-text-disabled)', fontSize: '0.85rem' }}>
             면적을 선택하면 차트가 표시됩니다
@@ -1290,7 +1320,7 @@ export default function ChartPanel({ isOpen = false, favApts = [], removeFavorit
           <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>단위: 억원</span>
         </div>
         {series.length > 0 ? (
-          <MultiSeriesTradeChart series={series} isMobile={isMobile} />
+          <MultiSeriesTradeChart series={series} isMobile={isMobile} theme={theme} />
         ) : (
           <div style={{ height: getChartHeight(isMobile, window.innerWidth), display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg)', borderRadius: 8, color: 'var(--color-text-disabled)', fontSize: '0.85rem' }}>
             면적을 선택하면 차트가 표시됩니다

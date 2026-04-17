@@ -11,16 +11,9 @@ import {
   clearTradeCacheForPnu, parseDoroKey,
 } from './services/aptData';
 import { commonPanelStyle, commonHeaderStyle } from '../styles/panelStyles';
-import { cssVar, SERIES_COLORS } from '../styles/themes';
+import { cssVar } from '../styles/themes';
 import { PickButton, FavChip } from '../components/FavoriteButton';
 
-// L1 색상 — SERIES_COLORS 기반으로 통일
-const L1_COLORS = {
-  volume:   SERIES_COLORS[0] + 'AA',
-  avgLine:  SERIES_COLORS[0],
-  dot:      SERIES_COLORS[0] + 'AA',
-  triangle: SERIES_COLORS[0] + 'AA',
-};
 
 /* 면적 탭 스크롤바 스타일 (webkit) */
 const areaScrollbarStyle = `
@@ -117,7 +110,7 @@ function makeChartOptions(height, width = 800) {
 // ────────────────────────────────────────────
 // L1: 아파트 실거래 평균가 + 거래량 + dot 차트
 // ────────────────────────────────────────────
-export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile, aptName, selArea, compact = false }) {
+export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindow, isMobile, aptName, selArea, compact = false, theme = '' }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const volSeriesRef = useRef(null);
@@ -183,6 +176,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
     }
 
     const visibleRange = chart.timeScale().getVisibleRange();
+    if (!visibleRange) return;
     while (svg.firstChild) svg.removeChild(svg.firstChild);
 
     const rect = containerRef.current?.getBoundingClientRect();
@@ -206,7 +200,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
           circle.setAttribute('cx', xCoord);
           circle.setAttribute('cy', yCoord);
           circle.setAttribute('r', 3);
-          circle.setAttribute('fill', L1_COLORS.dot);
+          circle.setAttribute('fill', cssVar('--color-accent') + 'AA');
           circle.setAttribute('stroke', 'none');
           circle.setAttribute('stroke-width', '0');
           svg.appendChild(circle);
@@ -216,7 +210,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
           const points = `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`;
           const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
           poly.setAttribute('points', points);
-          poly.setAttribute('fill', L1_COLORS.triangle);
+          poly.setAttribute('fill', cssVar('--color-accent') + 'AA');
           poly.setAttribute('stroke', 'none');
           poly.setAttribute('stroke-width', '0');
           svg.appendChild(poly);
@@ -233,6 +227,16 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
     chartRef.current?.applyOptions({ height: chartHeight });
   }, [chartHeight]);
 
+  // 테마 변경 시 색상 재적용 — applyTheme 이후 CSS 변수 읽도록 RAF 사용
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      avgSeriesRef.current?.applyOptions({ color: cssVar('--color-accent') });
+      volSeriesRef.current?.applyOptions({ color: cssVar('--color-accent') + 'AA' });
+      redrawDotsRef.current?.();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 차트 초기화
   useEffect(() => {
     if (!containerRef.current) return;
@@ -246,10 +250,16 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
         scaleMargins: { top: 0, bottom: 0 },
       },
       ...(compact && {
+        grid: {
+          vertLines: { visible: false },
+          horzLines: { visible: false },
+        },
         crosshair: {
           vertLine: { visible: false, labelVisible: false },
           horzLine: { visible: false, labelVisible: false },
         },
+        rightPriceScale: { borderVisible: false },
+        timeScale: { borderVisible: false },
         handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
         handleScale: { mouseWheel: false, pinch: false, axisPressedMouseMove: { time: false, price: false } },
       }),
@@ -259,7 +269,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
     // 거래량 히스토그램 — compact 모드에서는 생략
     if (!compact) {
       const volSeries = chart.addSeries(HistogramSeries, {
-        color: L1_COLORS.volume,
+        color: cssVar('--color-accent') + 'AA',
         priceScaleId: 'vol',
         lastValueVisible: false,
         priceLineVisible: false,
@@ -272,7 +282,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
 
     // 평균가 라인
     const avgSeries = chart.addSeries(LineSeries, {
-      color: L1_COLORS.avgLine,
+      color: cssVar('--color-accent'),
       lineWidth: 2,
       priceScaleId: 'right',
       lastValueVisible: true,
@@ -334,7 +344,7 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
       const volData = x.map((ym, i) => ({
         time: toTime(ym),
         value: vol[i] || 0,
-        color: L1_COLORS.volume,
+        color: cssVar('--color-accent') + 'AA',
       })).sort((a, b) => a.time > b.time ? 1 : -1);
       volSeriesRef.current.setData(volData);
     }
@@ -380,12 +390,12 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
   return (
     <div style={{ width: compact ? '100%' : `${CHART_WIDTH_RATIO * 100}%`, margin: '0 auto' }}>
     {aptName && (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 4 }}>
-        <span style={{ fontSize: '0.92rem', fontWeight: 800, color: 'var(--color-text-main)' }}>{trimAptName(aptName)}</span>
-        {selArea && <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)' }}>{selArea.toFixed(1)}㎡</span>}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: compact ? 'flex-start' : 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{ fontSize: '0.92rem', fontWeight: 500, color: 'var(--color-text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trimAptName(aptName)}</span>
+        {selArea && <span style={{ fontSize: '0.72rem', color: 'var(--color-text-muted)', flexShrink: 0 }}>{selArea.toFixed(1)}㎡</span>}
       </div>
     )}
-    <div style={{ position: 'relative', width: '100%', height: chartHeight, border: '1px solid var(--color-border)', borderRadius: 0, overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: chartHeight, border: compact ? 'none' : '1px solid var(--color-border)', borderRadius: 0, overflow: 'hidden' }}>
       <div ref={containerRef} style={{ width: '100%', height: chartHeight }} />
       {/* SVG overlay — dot 렌더링 */}
       <svg
@@ -406,23 +416,23 @@ export function AptTradeChart({ x, vol, avg, ptsX, ptsY, pPtsX, pPtsY, yearWindo
     {!compact && x.length > 0 && (
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', padding: '4px 0 0' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-          <span style={{ width: 12, height: 12, background: L1_COLORS.volume, display: 'inline-block', borderRadius: 2 }} />
+          <span style={{ width: 12, height: 12, background: 'var(--color-accent)', opacity: 0.67, display: 'inline-block', borderRadius: 2 }} />
           거래량
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
-          <span style={{ width: 16, height: 2, background: L1_COLORS.avgLine, display: 'inline-block', borderRadius: 2 }} />
+          <span style={{ width: 16, height: 2, background: 'var(--color-accent)', display: 'inline-block', borderRadius: 2 }} />
           평균가
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
           <svg width="10" height="10" viewBox="0 0 10 10">
-            <circle cx="5" cy="5" r="4" fill={L1_COLORS.dot} />
+            <circle cx="5" cy="5" r="4" fill="var(--color-accent)" opacity="0.67" />
           </svg>
           실거래
         </span>
         {pPtsX?.length > 0 && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', fontWeight: 400, color: 'var(--color-text-main)' }}>
             <svg width="10" height="10" viewBox="0 0 10 10">
-              <polygon points="5,1 0,9 10,9" fill={L1_COLORS.triangle} />
+              <polygon points="5,1 0,9 10,9" fill="var(--color-accent)" opacity="0.67" />
             </svg>
             입주권
           </span>
@@ -894,7 +904,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       ['주소(지번)',   (() => { const v = pickList('kaptAddr'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
       ['주소(도로명)', (() => { const v = pickList('doroJuso'); const n = pickList('kaptName'); return (v && n) ? v.replace(new RegExp('\\s*' + n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trim() : v; })()],
       ['우편번호',     pickList('zipcode')],
-      ['단지면적',     fmtArea(pickList('kaptTarea'))],
+      ['연면적',       fmtArea(pickList('kaptTarea'))],
       ['동 수',        pickList('kaptDongCnt') ? `${pickList('kaptDongCnt')}동` : null],
       ['최고층',       pickList('kaptTopFloor') ? `${pickList('kaptTopFloor')}층` : null],
       ['지하층',       pickList('kaptBaseFloor') ? `${pickList('kaptBaseFloor')}층` : null],
@@ -948,26 +958,16 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
           </svg>
         </span>
 
-        {/* 즐겨찾기 단지Pick 버튼 — 아파트 선택 시만 */}
-        {selectedApt && (
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <PickButton
-              isFav={isFav}
-              onClick={() => isFav ? removeFavoriteApt(aptKey) : addFavoriteApt(selectedApt, areas, hotAreas)}
-            />
-          </div>
-        )}
-
         {/* 아파트명 or placeholder */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {selectedApt ? (
-            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1rem', color: '#fff' }}>
+            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1.25rem', color: '#fff' }}>
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {trimAptName(selectedApt.kaptName)}
               </span>
             </span>
           ) : (
-            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1rem', color: 'rgba(255,255,255,0.45)' }}>
+            <span style={{ display: 'flex', alignItems: 'center', fontWeight: 800, fontSize: '1.25rem', color: 'rgba(255,255,255,0.45)' }}>
               아파트를 선택하세요
             </span>
           )}
@@ -1094,6 +1094,7 @@ function LeftPanel({ selectedApt, onPanTo, onSelectApt, favApts, addFavoriteApt,
       <div ref={scrollRef} style={{
         flex: 1,
         overflowY: 'auto',
+        scrollbarGutter: 'stable',
         display: 'flex',
         flexDirection: 'column', gap: 14,
         padding,
