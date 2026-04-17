@@ -319,6 +319,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
         style={{ flex: 1, overflowY: 'auto', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 2, position: 'relative' }}
         onClick={(e) => {
           if (e.target.tagName === 'IMG' && selectedPost?.chartMeta) {
+            if (imgTooltip) { setImgTooltip(null); return; }
             const rect = e.target.getBoundingClientRect();
             setImgTooltip({ x: rect.left + rect.width / 2, y: rect.top });
           } else {
@@ -346,7 +347,7 @@ function BoardPanel({ backHandlerRef, user, pendingPostContent, pendingPostTitle
               setImgTooltip(null);
             }}
           >
-            해당 단지끼리 비교로 이동
+            단지비교 가져가기
           </div>
         )}
       </div>
