@@ -416,7 +416,7 @@ export const MAP_ALPHA = {
 export const SERIES_COLORS = [
   '#0047AB', // [0] avgLine / 아파트 기준선 — Cobalt
   '#E74C3C', // [1] S&P500 — Red
-  '#6A9470', // [2] NASDAQ — Pistachio
+  '#B5407A', // [2] NASDAQ — Pistachio
   '#4F8EF7', // [3] DOW — Blue
   '#FFD93D', // [4] Gold — Yellow
   '#F97316', // [5] KOSPI — Orange
@@ -424,7 +424,7 @@ export const SERIES_COLORS = [
   '#2B8CB8', // [7] 한국금리 — Steel Blue
   '#C0392B', // [8] 미국금리 — Red↓
   '#922B21', // [9] BTC — Red↓↓
-  '#B5407A', // [10] ETH — Magenta
+  '#6A9470', // [10] ETH — Magenta
   '#7C3AED', // [11] 원/달러 — Purple
 ];
 
